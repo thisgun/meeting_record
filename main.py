@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from config import load_config
-from src import audio, storage, summarizer, transcriber
+from src import audio, dictionary, notifier, storage, summarizer, transcriber
 from src.g5_client import G5ApiError, G5MettingApiClient, format_utterance_comment
 
 
@@ -30,6 +30,8 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     if not src_path.exists():
         print(f"[error] 파일이 존재하지 않습니다: {src_path}", file=sys.stderr)
         return 2
+
+    pipeline_start = time.time()
 
     total_steps = 6 if upload else 5
 
@@ -86,6 +88,8 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
                     f"음성 인식 + 화자 분리 (WhisperX {cfg.whisper_model}, 분리: {diarize_mode})")
         print("    ※ CPU 환경에서는 오래 걸립니다 (1분 오디오당 2~4분).")
         t0 = time.time()
+        # 사전의 용어들을 Whisper에게 미리 알림 (정확도 ↑)
+        whisper_prompt = dictionary.build_whisper_prompt(cfg.db_path)
         segments = transcriber.transcribe_and_diarize(
             str(wav_path),
             hf_token=cfg.huggingface_token,
@@ -98,7 +102,12 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
             cpu_threads=cfg.whisper_cpu_threads,
             batch_size=cfg.whisper_batch_size,
             vad_filter=cfg.whisper_vad_filter,
+            initial_prompt=whisper_prompt,
         )
+        # STT 후 사전 치환 적용 (Whisper가 못 잡은 오류 자동 교정)
+        segments, n_fixed = dictionary.apply_to_segments(cfg.db_path, segments)
+        if n_fixed > 0:
+            print(f"    → 사전 치환 적용: {n_fixed}건")
         segments = transcriber.remap_speakers(segments)
         segments = transcriber.merge_consecutive(segments)
         # 캐시 저장 (다음 실패 시 재사용)
@@ -138,6 +147,15 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     if not upload:
         print("\n✓ 완료 (--no-upload: 원격 업로드 생략)")
         print(f"  meeting_id={meeting_id}")
+        notifier.notify_meeting_done(
+            meeting_id=meeting_id,
+            title=summary["title"],
+            source_file=str(src_path),
+            duration_sec=duration,
+            speaker_count=len({s["speaker"] for s in segments}),
+            utterance_count=len(segments),
+            elapsed_sec=time.time() - pipeline_start,
+        )
         return 0
 
     # 6) 그누보드5 업로드
@@ -180,6 +198,17 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         return 3
 
     print(f"\n✓ 완료. meeting_id={meeting_id}, 게시글 wr_id={wr_id}")
+    notifier.notify_meeting_done(
+        meeting_id=meeting_id,
+        title=summary["title"],
+        source_file=str(src_path),
+        duration_sec=duration,
+        speaker_count=len({s["speaker"] for s in segments}),
+        utterance_count=len(segments),
+        wr_id=wr_id,
+        g5_url=post.get("url"),
+        elapsed_sec=time.time() - pipeline_start,
+    )
     return 0
 
 

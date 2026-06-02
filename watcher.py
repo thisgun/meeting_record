@@ -96,9 +96,29 @@ def process_file(audio_path: Path) -> int:
             return 0
         else:
             log(f"✗ 실패 (exit {proc.returncode}): {audio_path.name} ({elapsed // 60}분)")
+            try:
+                from src.notifier import notify_meeting_failed
+                notify_meeting_failed(
+                    source_file=str(audio_path),
+                    error=f"main.py exit code {proc.returncode}",
+                    stage="watcher → main.py",
+                    elapsed_sec=elapsed,
+                )
+            except Exception:
+                pass
             return proc.returncode
     except Exception as e:
         log(f"✗ 예외: {audio_path.name} - {e}")
+        try:
+            from src.notifier import notify_meeting_failed
+            notify_meeting_failed(
+                source_file=str(audio_path),
+                error=str(e),
+                stage="watcher 호출",
+                elapsed_sec=int(time.time() - start),
+            )
+        except Exception:
+            pass
         return 1
 
 

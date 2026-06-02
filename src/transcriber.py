@@ -53,6 +53,7 @@ def transcribe_only(
     cpu_threads: int = 0,
     batch_size: int = 8,
     vad_filter: bool = True,
+    initial_prompt: str = "",
 ):
     """STT + word align만 수행. 화자 분리는 호출자가 별도 처리.
 
@@ -79,6 +80,13 @@ def transcribe_only(
     if vad_filter:
         # WhisperX 자체 VAD를 사용 (기본 활성). vad_options 지정 가능.
         model_kwargs["vad_options"] = {"min_silence_duration_ms": 500}
+
+    if initial_prompt:
+        # WhisperX는 asr_options에 initial_prompt 전달
+        existing = model_kwargs.get("asr_options", {})
+        existing["initial_prompt"] = initial_prompt
+        model_kwargs["asr_options"] = existing
+        print(f"[info] Whisper initial_prompt: {initial_prompt[:80]}...")
 
     print(f"[info] Whisper 설정: batch={batch_size}, threads={cpu_threads or 'auto'}, vad={vad_filter}")
     model = whisperx.load_model(resolved, **model_kwargs)
@@ -164,6 +172,7 @@ def transcribe_and_diarize(
     cpu_threads: int = 0,
     batch_size: int = 8,
     vad_filter: bool = True,
+    initial_prompt: str = "",
 ) -> list[dict]:
     """STT + 화자 분리 통합. hf_token이 비어있으면 로컬 (speechbrain) fallback.
 
@@ -184,6 +193,7 @@ def transcribe_and_diarize(
         cpu_threads=cpu_threads,
         batch_size=batch_size,
         vad_filter=vad_filter,
+        initial_prompt=initial_prompt,
     )
 
     if hf_token:

@@ -486,6 +486,137 @@ http://<PC의-LAN-IP>/gnuboard5/bbs/board.php?bo_table=metting
 
 PC의 IP 확인: `ipconfig` 명령 또는 `Get-NetIPAddress`
 
+### 회의록 export (Word / HTML)
+
+```powershell
+python export.py 5                              # meeting_id=5 → ./data/exports/<title>.docx
+python export.py 5 --format html                # HTML로
+python export.py 5 --format all                 # docx + html 둘 다
+python export.py 5 --no-transcript              # 발화 전문 제외 (요약만)
+python export.py --all                          # 모든 회의 일괄
+```
+
+**PDF가 필요하면**: HTML로 export 후 브라우저에서 `Ctrl+P` → "PDF로 저장"이 가장 깨끗합니다. 한국어 폰트 문제 없고, 표/리스트도 그대로 보입니다.
+
+생성된 docx 포함 내용:
+- 표지 + 메타정보 표 (작성일시/원본/길이/화자수)
+- 마크다운 요약 본문 (헤더/리스트/굵게 등 변환)
+- 발화 전문 표 (시간/화자/내용) — `--no-transcript`로 제외 가능
+
+### 회의 통계
+
+```powershell
+python stats.py 5                    # 화자별 발언 횟수/시간/비율
+python stats.py 5 --time              # 시간 구간별 분포 추가
+python stats.py 5 --json              # JSON 출력 (다른 도구 연동용)
+```
+
+예시 출력:
+```
+화자                      발언 횟수      총 발언 시간      평균 발언     비율
+사용자4                       44      30분 55초        42초  32.7%
+사용자3 (장관)                62       28분 6초        27초  29.7%
+```
+
+### 처리 결과 알림 (Slack / 이메일)
+
+회의 처리 완료/실패 시 자동으로 통보합니다. **두 채널 모두 옵션**이고, 설정된 채널만 작동합니다.
+
+**.env 설정 예시**
+
+```env
+NOTIFY_LEVEL=all                                # all=성공/실패, fail=실패만, off=알림 끔
+
+# Slack
+NOTIFY_SLACK_WEBHOOK=https://hooks.slack.com/services/T.../B.../...
+
+# 이메일 (Gmail 예시: 앱 비밀번호 사용)
+NOTIFY_EMAIL_HOST=smtp.gmail.com
+NOTIFY_EMAIL_PORT=587
+NOTIFY_EMAIL_USER=sender@gmail.com
+NOTIFY_EMAIL_PASS=앱비밀번호
+NOTIFY_EMAIL_FROM=sender@gmail.com
+NOTIFY_EMAIL_TO=receiver1@example.com,receiver2@example.com
+```
+
+**Slack 메시지 예시:**
+```
+✅ 회의록 처리 완료
+제목: 산업안전 강화 기관장 회의...
+원본: 회의.mp3
+길이: 1시간 46분 / 발화 171건 / 화자 6명
+처리 시간: 33분 12초
+게시글: wr_id=548
+```
+
+watcher.py로 무인 운영 시에도 자동 적용됩니다.
+
+### 도메인 사전 — STT 정확도 향상
+
+회의에 자주 등장하는 고유명사/전문용어를 사전에 등록해두면 STT가 더 정확하게 인식하고, 자주 발생하는 오인식은 자동으로 교정됩니다.
+
+**기본 사용**
+
+```powershell
+# 1) 회의에 등장할 용어 등록 (Whisper에게 컨텍스트 제공)
+python dict.py add 산업안전감독관
+python dict.py add 노동부
+
+# 2) 자주 발생하는 오인식 교정 패턴 등록
+python dict.py add 산업안전 --pattern 산업안정              # "산업안정"으로 인식되면 "산업안전"으로
+python dict.py add 이민재 --pattern "(?:이민자|이민제)"     # 정규식 매칭
+python dict.py add 중대재해 --pattern 중대제해
+
+# 3) 미리보기
+python dict.py test "산업안정 강화 회의"                    # 어떻게 치환되는지 확인
+python dict.py prompt                                       # Whisper에게 전달될 컨텍스트 확인
+```
+
+**작동 방식**
+
+1. **회의 처리 시 자동 적용** (`main.py` 또는 `watcher.py` 어느 쪽이든):
+   - Whisper의 `initial_prompt`로 등록된 용어들 전달 → 처음부터 정확한 인식
+   - STT 결과에 후처리 치환 적용 → Whisper가 놓친 오류 교정
+2. **기존 회의에 소급 적용**:
+   ```powershell
+   python dict.py apply-to-meeting 5            # meeting_id=5 의 발화 + 요약 + 그누보드5 일괄 갱신
+   python dict.py apply-to-meeting 5 --skip-remote   # 그누보드5는 건드리지 않고 로컬만
+   ```
+
+**CSV 일괄 등록**
+
+```csv
+term,pattern,replacement,notes
+산업안전,산업안정,,STT 흔한 오류
+중대재해,중대제해,,
+이민재,(?:이민자|이민제),,정책실장
+```
+```powershell
+python dict.py import-csv dictionary.csv
+```
+
+**관리**
+
+```powershell
+python dict.py list                          # 전체 목록
+python dict.py disable 3                     # id=3 비활성화 (삭제는 아님)
+python dict.py enable 3
+python dict.py delete 3                      # 완전 삭제
+```
+
+**예시: 정부 회의 도메인**
+
+```powershell
+python dict.py add 산업안전강화 --pattern 산업안정강화
+python dict.py add 기관장 --pattern 기간장
+python dict.py add 중대재해
+python dict.py add 노동부
+python dict.py add 안전공단
+python dict.py add 갈매기특공대 --pattern "갈매기 특공대"
+```
+
+> **권장**: 첫 회의 처리 후 STT 결과를 훑어보며 흔한 오류 단어를 등록하세요. 두 번째 회의부터 같은 오류가 자동 교정됩니다.
+
 ### 화자 등록 (enrollment) — "사용자N" 대신 실제 이름
 
 한 번 사람의 음성을 등록해두면 이후 회의에서 자동으로 실제 이름이 매핑됩니다.
