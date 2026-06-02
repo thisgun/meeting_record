@@ -477,6 +477,45 @@ start http://127.0.0.1/gnuboard5/bbs/board.php?bo_table=metting
 start http://127.0.0.1/gnuboard5/bbs/board.php?bo_table=metting&wr_id=8
 ```
 
+### 웹 UI (Streamlit) — 브라우저로 회의록 관리
+
+CLI 대신 브라우저에서 회의 목록 조회/편집/검색/export까지 모두 가능.
+
+```powershell
+cd c:\dev2\metting_record
+python -m streamlit run app.py
+```
+
+브라우저 자동으로 열리거나 `http://localhost:8501` 접속.
+
+**핸드폰/다른 PC에서 접속** (같은 Wi-Fi):
+```powershell
+python -m streamlit run app.py --server.address 0.0.0.0
+```
+→ `http://<PC-IP>:8501` 로 접속 (예: `http://192.168.45.246:8501`)
+
+**페이지 구성:**
+
+| 페이지 | 기능 |
+|--------|------|
+| 📋 **회의 목록** | 전체 회의 + 상세 보기 (요약/발화/통계/편집/Export 탭) |
+| 🔍 **검색** | FTS5 회의 + 발화 검색 |
+| 📚 **사전 관리** | 도메인 사전 추가/삭제 + Whisper 프롬프트 미리보기 |
+| 👤 **화자 등록** | 등록된 화자 목록 + 관리 |
+
+**회의 상세 편집 탭에서 가능한 작업:**
+- 화자 라벨 일괄 변경 (`사용자3` → `장관님`)
+- 발화 텍스트 인라인 수정 (검색 → 수정 → 저장)
+- 요약 본문 마크다운 직접 편집
+- 회의 삭제 (확인 입력 필수)
+
+**Export 탭에서 가능한 작업:**
+- `.docx` 다운로드
+- `.html` 다운로드 (브라우저 Ctrl+P로 PDF 변환 가능)
+- 그누보드5 게시글 바로 이동 링크
+
+> **참고**: 모든 변경 사항은 즉시 SQLite에 반영되고 FTS 인덱스도 자동 동기화됩니다. 그누보드5는 별도 sync가 필요한 부분 (현재 발화 텍스트는 자동 sync, 화자명/요약은 수동 갱신).
+
 ### 외부 디바이스에서 접속
 
 같은 Wi-Fi의 핸드폰/노트북에서:

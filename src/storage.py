@@ -208,6 +208,61 @@ def mark_utterance_synced(
         )
 
 
+def list_meetings(db_path, *, limit: int = 100) -> list[dict]:
+    """전체 회의 목록 (최신순)."""
+    with connect(db_path) as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT m.id, m.created_at, m.title, m.duration_sec, m.speaker_count,
+                      m.remote_post_id, m.sync_status,
+                      (SELECT COUNT(*) FROM utterances u WHERE u.meeting_id = m.id) AS utterance_count
+               FROM meetings m ORDER BY m.id DESC LIMIT ?""",
+            (int(limit),),
+        ).fetchall()]
+
+
+def update_utterance_text(db_path, utterance_id: int, new_text: str) -> bool:
+    """발화 텍스트 수정 (FTS 자동 동기화)."""
+    with connect(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE utterances SET text = ? WHERE id = ?",
+            (new_text, int(utterance_id)),
+        )
+        return cur.rowcount > 0
+
+
+def update_speaker_label(db_path, meeting_id: int, old_label: str, new_label: str) -> int:
+    """meeting 내의 화자 라벨 일괄 변경 (예: '사용자3' → '장관님'). 변경된 발화 수 반환."""
+    with connect(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE utterances SET speaker = ? WHERE meeting_id = ? AND speaker = ?",
+            (new_label, int(meeting_id), old_label),
+        )
+        return cur.rowcount
+
+
+def update_meeting_summary(db_path, meeting_id: int, *, title: str | None = None, summary_md: str | None = None) -> None:
+    fields = []
+    params: list = []
+    if title is not None:
+        fields.append("title = ?")
+        params.append(title)
+    if summary_md is not None:
+        fields.append("summary_md = ?")
+        params.append(summary_md)
+    if not fields:
+        return
+    params.extend([int(meeting_id)])
+    with connect(db_path) as conn:
+        conn.execute(f"UPDATE meetings SET {', '.join(fields)} WHERE id = ?", params)
+
+
+def delete_meeting(db_path, meeting_id: int) -> bool:
+    """회의 + 발화 일괄 삭제 (CASCADE)."""
+    with connect(db_path) as conn:
+        cur = conn.execute("DELETE FROM meetings WHERE id = ?", (int(meeting_id),))
+        return cur.rowcount > 0
+
+
 def search_meetings(
     db_path,
     query: str,

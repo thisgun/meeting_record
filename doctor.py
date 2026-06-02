@@ -166,6 +166,39 @@ def check_models():
                 ok(sub.name)
 
 
+def check_streamlit():
+    section("Streamlit 웹 UI")
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:8501/_stcore/health", timeout=2) as r:
+            txt = r.read().decode("utf-8", errors="ignore").strip()
+            if txt == "ok":
+                ok("Streamlit 서버 응답", "http://localhost:8501")
+            else:
+                warn("Streamlit 응답 이상", txt[:80])
+    except Exception:
+        warn("Streamlit 서버 미실행", "실행: python -m streamlit run app.py")
+
+
+def check_notifier():
+    section("알림 설정")
+    try:
+        from src.notifier import is_configured
+        cfg = is_configured()
+        level = cfg.get("level", "off")
+        ok(f"NOTIFY_LEVEL = {level}")
+        if cfg.get("slack"):
+            ok("Slack webhook 설정됨")
+        else:
+            warn("Slack webhook 미설정", "선택사항 — .env에 NOTIFY_SLACK_WEBHOOK 설정")
+        if cfg.get("email"):
+            ok("이메일 SMTP 설정됨")
+        else:
+            warn("이메일 미설정", "선택사항 — .env에 NOTIFY_EMAIL_* 설정")
+    except Exception as e:
+        warn("notifier 확인 실패", str(e))
+
+
 def check_xampp():
     section("XAMPP (MariaDB / Apache / PHP)")
     try:
@@ -185,7 +218,7 @@ def check_packages():
     section("Python 핵심 패키지")
     deps = ["whisperx", "faster_whisper", "torch", "torchaudio",
             "speechbrain", "sklearn", "soundfile", "ollama",
-            "dotenv", "watchdog"]
+            "dotenv", "watchdog", "docx", "streamlit"]
     for d in deps:
         try:
             mod = __import__(d)
@@ -205,6 +238,8 @@ def main() -> int:
     check_models()
     check_ollama()
     check_xampp()
+    check_streamlit()
+    check_notifier()
     check_config()
     print()
     return 0
