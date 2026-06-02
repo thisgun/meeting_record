@@ -66,25 +66,107 @@ KO_STOPWORDS = {
 
 
 def _korean_words(text: str, *, min_len: int = 2, max_len: int = 12) -> list[str]:
-    """한국어 단어(2~12글자) 추출. 영문/숫자 섞인 단어는 제외."""
+    """한국어 단어(2~12글자) 정규식 추출 (kiwipiepy 미설치 시 폴백)."""
     return re.findall(rf"[가-힣]{{{min_len},{max_len}}}", text)
 
 
+# kiwipiepy 싱글톤 캐시 (모델 로드 비용 절감)
+_KIWI = None
+_KIWI_TRIED = False
+
+
+def _get_kiwi():
+    """Kiwi 인스턴스 1회만 초기화. 설치 안 됐으면 None."""
+    global _KIWI, _KIWI_TRIED
+    if _KIWI_TRIED:
+        return _KIWI
+    _KIWI_TRIED = True
+    try:
+        from kiwipiepy import Kiwi
+        _KIWI = Kiwi()
+        # 첫 호출 워밍업
+        _KIWI.tokenize("워밍업")
+    except ImportError:
+        _KIWI = None
+    return _KIWI
+
+
+# Kiwi 태그:
+#   NNG: 일반명사, NNP: 고유명사, SL: 외국어, SN: 숫자
+# 분석 대상으로 삼는 태그
+_NOUN_TAGS = {"NNG", "NNP", "SL"}
+
+
+def _extract_nouns_kiwi(kiwi, text: str, *, min_len: int = 2) -> list[str]:
+    """Kiwi로 명사 추출 + 인접 명사 결합 (복합명사 보존).
+
+    예: "산업/안전/감독관" 3개 토큰 → "산업안전감독관" 한 단어로.
+    """
+    tokens = kiwi.tokenize(text)
+    out: list[str] = []
+    buf: list[str] = []
+    for t in tokens:
+        if t.tag in _NOUN_TAGS and len(t.form) >= 1:
+            buf.append(t.form)
+        else:
+            if buf:
+                # 단독 1글자는 의미 작은 경우 많아 제외
+                merged = "".join(buf)
+                if len(merged) >= min_len:
+                    out.append(merged)
+                buf = []
+    if buf:
+        merged = "".join(buf)
+        if len(merged) >= min_len:
+            out.append(merged)
+    return out
+
+
 def top_keywords(
-    texts: list[str], *, top_n: int = 30, min_count: int = 2, exclude: Optional[set[str]] = None
+    texts: list[str],
+    *,
+    top_n: int = 30,
+    min_count: int = 2,
+    exclude: Optional[set[str]] = None,
+    method: str = "auto",
 ) -> list[tuple[str, int]]:
     """텍스트 모음에서 한국어 키워드 빈도 추출.
 
-    완벽한 형태소 분석은 아니지만 한국어 명사 위주 단순 추출 + 흔한 조사/어미 제외.
+    method:
+        "auto"  - kiwipiepy 있으면 형태소 분석, 없으면 정규식
+        "kiwi"  - kiwipiepy 강제 (없으면 ImportError)
+        "regex" - 정규식 기반
     """
     stopwords = KO_STOPWORDS | (exclude or set())
+
+    use_kiwi = False
+    kiwi = None
+    if method == "kiwi":
+        from kiwipiepy import Kiwi  # 명시적 실패
+        kiwi = _get_kiwi()
+        if kiwi is None:
+            raise ImportError("kiwipiepy 로드 실패")
+        use_kiwi = True
+    elif method == "auto":
+        kiwi = _get_kiwi()
+        use_kiwi = kiwi is not None
+
     counter: Counter[str] = Counter()
-    for t in texts:
-        for w in _korean_words(t):
+    for text in texts:
+        if use_kiwi:
+            words = _extract_nouns_kiwi(kiwi, text or "")
+        else:
+            words = _korean_words(text or "")
+        for w in words:
             if w in stopwords:
                 continue
             counter[w] += 1
     return [(w, n) for w, n in counter.most_common(top_n) if n >= min_count]
+
+
+def get_extraction_method() -> str:
+    """현재 사용 중인 키워드 추출 방식 (doctor.py 등에서 표시용)."""
+    return "kiwipiepy (형태소 분석)" if _get_kiwi() is not None else "정규식 (kiwipiepy 미설치)"
 
 
 def compare_two(db_path, id_a: int, id_b: int) -> dict:

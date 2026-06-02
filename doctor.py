@@ -180,6 +180,15 @@ def check_streamlit():
         warn("Streamlit 서버 미실행", "실행: python -m streamlit run app.py")
 
 
+def check_keyword_extractor():
+    section("키워드 추출")
+    try:
+        from src.comparator import get_extraction_method
+        ok(get_extraction_method())
+    except Exception as e:
+        warn("keyword extractor 확인 실패", str(e))
+
+
 def check_notifier():
     section("알림 설정")
     try:
@@ -218,7 +227,7 @@ def check_packages():
     section("Python 핵심 패키지")
     deps = ["whisperx", "faster_whisper", "torch", "torchaudio",
             "speechbrain", "sklearn", "soundfile", "ollama",
-            "dotenv", "watchdog", "docx", "streamlit"]
+            "dotenv", "watchdog", "docx", "streamlit", "kiwipiepy"]
     for d in deps:
         try:
             mod = __import__(d)
@@ -239,6 +248,7 @@ def main() -> int:
     check_ollama()
     check_xampp()
     check_streamlit()
+    check_keyword_extractor()
     check_notifier()
     check_config()
     print()
