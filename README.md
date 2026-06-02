@@ -1,0 +1,784 @@
+# 회의록 자동 기록 시스템 (metting_record)
+
+핸드폰으로 녹음한 회의 음성 파일을 업로드하면, AI가 자동으로 화자를 구분하고 텍스트로 변환한 뒤 요약해서 게시판에 등록해주는 도구입니다.
+
+> **⚠️ 안내:** "metting"은 "meeting"의 오타가 아니라 사용자가 지정한 정식 명칭입니다. 코드 전반에서 일관되게 사용됩니다.
+
+---
+
+## 목차
+
+1. [이게 뭐 하는 프로그램인가요?](#1-이게-뭐-하는-프로그램인가요)
+2. [전체 시스템 구조](#2-전체-시스템-구조)
+3. [디렉토리 구조 상세](#3-디렉토리-구조-상세)
+4. [데이터 흐름 (실행 순서)](#4-데이터-흐름-실행-순서)
+5. [핵심 용어 정리](#5-핵심-용어-정리)
+6. [환경 구성](#6-환경-구성)
+7. [실행 방법](#7-실행-방법)
+8. [자주 발생하는 문제 (트러블슈팅)](#8-자주-발생하는-문제-트러블슈팅)
+9. [운영 시 점검 사항](#9-운영-시-점검-사항)
+
+---
+
+## 1. 이게 뭐 하는 프로그램인가요?
+
+### 사용 시나리오
+
+회의를 마치고 이런 작업을 자동화하고 싶다고 상상해보세요:
+
+1. 회의 중에 핸드폰으로 녹음 버튼만 누름
+2. 녹음 끝나고 PC에 음성 파일을 옮김
+3. 명령어 한 번 실행
+4. 자동으로:
+   - 누가 어떤 말을 했는지 화자별로 구분
+   - 음성을 한국어 텍스트로 변환
+   - 회의 제목, 개요, 결정 사항, 액션 아이템으로 요약
+   - 로컬 데이터베이스에 저장
+   - 사내 게시판(그누보드5)에 자동 등록
+
+이 모든 걸 한 번의 명령으로 처리합니다.
+
+### 왜 만들었나?
+
+- **회의록 작성 시간 절약**: 매번 손으로 정리 안 해도 됨
+- **검색 가능한 기록**: 모든 회의가 DB와 게시판에 누적됨
+- **프라이버시**: 모든 처리가 로컬 PC에서 수행됨 (음성/텍스트가 외부 클라우드로 안 나감)
+- **비용 0원**: 오픈소스 + 로컬 LLM (Ollama)만 사용
+
+---
+
+## 2. 전체 시스템 구조
+
+이 프로젝트는 **3개의 독립된 구성 요소**가 협력합니다.
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  ① Python 파이프라인  (c:\dev2\metting_record\)                │
+│                                                                │
+│   음성파일.mp3 → ffmpeg → WhisperX → speechbrain → Ollama     │
+│        ↓                                              ↓        │
+│   SQLite 저장 ───────────────────────────────────────►         │
+│                                                       │        │
+└──────────────────────────────────────────────────────┼─────────┘
+                                                       │ HTTP
+                                                       ▼
+┌──────────────────────────────────────────────────────┬─────────┐
+│  ② PHP REST API  (c:\dev2\g5_metting_api\)           │         │
+│                                                       │         │
+│   /health.php  /post.php  /comment.php  ◄────────────┘         │
+│        │                                                       │
+│        │ require_once "../gnuboard5/common.php"                │
+│        ▼                                                       │
+├────────────────────────────────────────────────────────────────┤
+│  ③ 그누보드5  (c:\dev2\gnuboard5\) ← 원본 무수정              │
+│                                                                │
+│   PHP 게시판 엔진 + MariaDB (XAMPP)                            │
+│   "metting" 게시판에 게시글 + 댓글 등록                       │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 왜 3개로 나눴나?
+
+- **① Python 파이프라인** — AI/ML 라이브러리(PyTorch, Whisper)를 쓰려면 Python이 필수
+- **② PHP REST API** — 그누보드5는 PHP 기반이라 PHP에서 호출하는 게 가장 안전. 원본을 건드리지 않고 별도 폴더에서 외부 API 제공
+- **③ 그누보드5 원본** — 사용자가 원본 코드를 수정하지 않기로 요구. 향후 그누보드5 업그레이드 시 충돌 없음
+
+각 구성 요소는 독립적으로 교체 가능합니다. 예: 그누보드5 대신 워드프레스를 쓰고 싶으면 ②만 다시 만들면 됨.
+
+---
+
+## 3. 디렉토리 구조 상세
+
+```
+c:\dev2\
+│
+├── metting_record\            ← ① Python 파이프라인 (메인 프로젝트)
+│   ├── main.py                  # CLI 진입점
+│   ├── config.py                # .env 파일 로드 및 검증
+│   ├── requirements.txt         # Python 패키지 목록
+│   ├── .env                     # 환경 변수 (사용자 비밀값)
+│   ├── .env.example             # .env 작성 가이드
+│   ├── .gitignore               # git이 무시할 파일 목록
+│   │
+│   ├── src\                     # 핵심 모듈
+│   │   ├── __init__.py
+│   │   ├── audio.py             # 오디오 파일을 16kHz WAV로 변환
+│   │   ├── transcriber.py       # 음성 → 텍스트 + 화자 분리
+│   │   ├── diarizer_local.py    # 로컬 화자 분리 (HF 토큰 불필요)
+│   │   ├── summarizer.py        # Ollama gemma4:e4b로 요약
+│   │   ├── storage.py           # SQLite 저장/조회
+│   │   └── g5_client.py         # 그누보드5 API 호출
+│   │
+│   ├── scripts\
+│   │   └── download_models.py   # AI 모델 사전 다운로드 (Windows 호환)
+│   │
+│   ├── data\                    # 데이터 저장소 (git 무시)
+│   │   ├── meetings.db          # SQLite 데이터베이스
+│   │   ├── uploads\             # 원본 음성 파일 백업
+│   │   ├── work\                # 변환된 WAV + 발화 캐시(JSON)
+│   │   └── models\              # 다운로드한 AI 모델 (~6GB)
+│   │       ├── faster-whisper-medium\
+│   │       ├── wav2vec2-korean\
+│   │       └── spkrec-ecapa-voxceleb\
+│   │
+│   └── tests\                   # 테스트용 음성 샘플
+│       └── test_10min.mp3
+│
+├── g5_metting_api\            ← ② PHP REST API
+│   ├── _bootstrap.php           # 공통 헬퍼: 인증, JSON 응답
+│   ├── _load_gnuboard5.php      # 그누보드5 common.php 로드 (트릭 포함)
+│   ├── config.php               # API 토큰, bo_table 설정
+│   ├── health.php               # GET: 헬스 체크
+│   ├── post.php                 # POST: 회의 요약을 게시글로 등록
+│   ├── comment.php              # POST: 발화 1건을 댓글로 등록
+│   └── README.md
+│
+└── gnuboard5\                 ← ③ 그누보드5 원본 (절대 수정 금지)
+    ├── common.php               # 시스템 핵심
+    ├── config.php               # 게시판 설정
+    ├── data\dbconfig.php        # DB 접속 정보
+    └── ... (그 외 게시판 엔진 전체)
+```
+
+### Apache가 접근하는 방식
+
+XAMPP Apache는 기본적으로 `C:\xampp\htdocs\` 폴더만 서비스합니다. 우리 프로젝트가 다른 위치에 있으므로 **Junction(디렉토리 링크)** 으로 연결했습니다:
+
+```
+C:\xampp\htdocs\gnuboard5         ──Junction──►  C:\dev2\gnuboard5
+C:\xampp\htdocs\g5_metting_api    ──Junction──►  C:\dev2\g5_metting_api
+```
+
+Junction은 Windows 심볼릭 링크의 일종으로, **관리자 권한 없이도** 생성 가능합니다 (`mklink /J`).
+
+---
+
+## 4. 데이터 흐름 (실행 순서)
+
+`python main.py "회의.mp3"` 명령을 실행하면 다음 단계로 흘러갑니다:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ [1/6] 오디오 변환                                                │
+│       audio.py가 ffmpeg를 호출                                   │
+│       회의.mp3 → 16kHz mono WAV (음성인식에 최적화된 포맷)        │
+│       data\uploads\ 에 원본 백업, data\work\<uuid>.wav 생성     │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ [2/6] 음성 인식 + 화자 분리                                       │
+│       transcriber.py: WhisperX(medium) → 한국어 텍스트 변환      │
+│       + wav2vec2-korean으로 단어별 시작/끝 시간 정밀화           │
+│       + diarizer_local.py: speechbrain으로 화자 임베딩 추출       │
+│       + scikit-learn 클러스터링으로 화자 N명 자동 추정             │
+│                                                                  │
+│       결과: [{"start":0.5, "end":2.3, "speaker":"사용자1",       │
+│              "text":"안녕하세요"}, ...]                          │
+│                                                                  │
+│       ★ 이 결과를 data\work\회의.segments.json 에 캐시 저장      │
+│         (다음 실행 시 STT 안 다시 돌림)                          │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ [3/6] 회의 요약                                                  │
+│       summarizer.py: Ollama gemma4:e4b 호출                     │
+│       프롬프트: "다음 회의를 정리해주세요" + 발화 전체           │
+│       출력: JSON {"title": "...", "summary_md": "## 개요 ..."}  │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ [4/6] 로컬 DB 저장                                               │
+│       storage.py: SQLite (data\meetings.db)                     │
+│       - meetings 테이블: 회의 제목, 요약, 길이, 동기화 상태       │
+│       - utterances 테이블: 발화 23건 각각 (화자, 시간, 텍스트)    │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ [5/6] 요약 미리보기 (화면 출력)                                   │
+│       제목, 마크다운 요약을 콘솔에 표시                          │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ [6/6] 그누보드5 업로드                                            │
+│       g5_client.py가 HTTP POST                                  │
+│       → http://127.0.0.1/g5_metting_api/post.php                │
+│         (게시글 1개 = 회의 요약)                                 │
+│       → http://127.0.0.1/g5_metting_api/comment.php             │
+│         (댓글 23개 = 발화 각각 "[03:15] 사용자1: ...")          │
+│                                                                  │
+│       PHP API → common.php 로드 → MariaDB에 직접 INSERT          │
+│                 → g5_board / g5_write_metting 테이블 갱신        │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                        ✓ 완료
+                        http://127.0.0.1/gnuboard5/bbs/board.php?bo_table=metting
+                        에서 결과 확인
+```
+
+---
+
+## 5. 핵심 용어 정리
+
+| 용어 | 설명 |
+|------|------|
+| **STT** | Speech-to-Text. 음성을 텍스트로 변환하는 기술 |
+| **Whisper** | OpenAI가 공개한 다국어 음성 인식 모델. 한국어 정확도 우수 |
+| **WhisperX** | Whisper에 단어 단위 시간 정렬과 화자 분리를 추가한 패키지 |
+| **Diarization** | 화자 분리. "누가 언제 말했는지" 구분하는 기술 |
+| **pyannote** | 화자 분리의 사실상 표준 라이브러리. HuggingFace 토큰 필요 |
+| **speechbrain** | 음성 임베딩 라이브러리. 우리는 ECAPA-TDNN 모델로 화자 임베딩 추출 |
+| **ECAPA-TDNN** | 사람 목소리를 192차원 벡터로 변환하는 신경망. 비슷한 목소리는 비슷한 벡터 |
+| **클러스터링** | 비슷한 벡터끼리 묶기. 발화별 음성 벡터를 묶어 화자 그룹 형성 |
+| **LLM** | Large Language Model. 텍스트 입출력 AI. 우리는 요약에 사용 |
+| **Ollama** | 로컬에서 LLM을 실행하는 도구. 외부 API 호출 없이 PC 안에서 돌아감 |
+| **gemma4:e4b** | Google Gemma 4 4B 효율 모델. 9.6GB. 한국어 요약 잘함 |
+| **그누보드5** | 한국에서 인기 있는 무료 PHP 게시판 엔진 |
+| **XAMPP** | Apache + MariaDB + PHP를 한 번에 설치해주는 패키지 |
+| **MariaDB** | MySQL의 오픈소스 포크. 호환됨 |
+| **bo_table** | 그누보드5에서 게시판 한 개를 식별하는 코드. 우리는 `"metting"` 사용 |
+| **wr_id** | 그누보드5 게시글 또는 댓글의 고유 ID |
+| **wr_is_comment** | 0이면 게시글, 1이면 댓글 (같은 테이블 사용) |
+
+---
+
+## 6. 환경 구성
+
+### 운영 환경 (현재 설치 완료)
+
+| 구성 요소 | 버전 | 위치 |
+|-----------|------|------|
+| Windows 11 Pro | - | - |
+| Python | 3.13.3 | `C:\Python313` |
+| ffmpeg | 8.1.1 | PATH에 등록됨 (winget 설치) |
+| XAMPP (Apache + MariaDB + PHP) | PHP 8.2.12, MariaDB 10.4.32 | `C:\xampp\` |
+| Ollama | 0.23.1 | 서비스로 실행 중 |
+| gemma4:e4b 모델 | 9.6GB | Ollama가 관리 |
+
+### Python 패키지 (requirements.txt)
+
+```text
+whisperx          # STT + 화자 분리 통합
+faster-whisper    # Whisper의 빠른 구현
+pyannote.audio    # 화자 분리 (HF 토큰 사용 시)
+torch             # 딥러닝 프레임워크 (CPU 버전)
+torchaudio        # 오디오 처리
+speechbrain       # 로컬 화자 임베딩 (HF 토큰 불필요)
+scikit-learn      # 클러스터링
+soundfile         # WAV 파일 입출력
+ollama            # Ollama Python 클라이언트
+requests          # HTTP 호출 (그누보드5 API)
+python-dotenv     # .env 파일 로드
+pydub             # 오디오 메타데이터
+```
+
+설치 명령:
+```powershell
+cd c:\dev2\metting_record
+pip install -r requirements.txt
+```
+
+### AI 모델 (사전 다운로드, ~6GB)
+
+| 모델 | 용도 | 크기 | 다운로드 위치 |
+|------|------|------|---------------|
+| faster-whisper-medium | 한국어 음성 → 텍스트 | 1.5GB | `data\models\faster-whisper-medium\` |
+| wav2vec2-korean | 단어별 시간 정렬 | 4.8GB | `data\models\wav2vec2-korean\` |
+| spkrec-ecapa-voxceleb | 화자 임베딩 | 85MB | `data\models\spkrec-ecapa-voxceleb\` |
+
+> **왜 사전 다운로드?** Windows에서 HuggingFace는 기본적으로 캐시에 심볼릭 링크를 만드는데, 일반 사용자 권한으로는 실패합니다. 그래서 `scripts/download_models.py`가 우리 프로젝트 폴더에 직접 다운로드하도록 해두었습니다.
+
+다운로드 명령:
+```powershell
+python scripts\download_models.py
+```
+
+### 환경 변수 (.env)
+
+```env
+# HuggingFace 토큰 (선택)
+# 비워두면 로컬 화자 분리 (speechbrain) 자동 사용
+# 채우면 더 정확한 pyannote 사용 (https://hf.co/pyannote/speaker-diarization-3.1 약관 동의 필요)
+HUGGINGFACE_TOKEN=
+
+# Ollama 설정
+OLLAMA_HOST=http://127.0.0.1:11434
+OLLAMA_MODEL=gemma4:e4b
+
+# Whisper 설정
+WHISPER_MODEL=medium             # tiny/base/small/medium/large-v3
+WHISPER_COMPUTE_TYPE=int8        # CPU에서는 int8 권장
+WHISPER_LANGUAGE=ko
+
+# 그누보드5 API
+G5_API_BASE=http://127.0.0.1/g5_metting_api
+G5_API_TOKEN=change-me-please-use-strong-random-token
+G5_BO_TABLE=metting
+
+# 경로 (보통 변경 안 함)
+DB_PATH=./data/meetings.db
+WORK_DIR=./data/work
+UPLOAD_DIR=./data/uploads
+```
+
+> **중요:** `config.py`는 `.env` 값이 시스템 환경변수보다 **우선** 적용되도록 `load_dotenv(override=True)`로 설정되어 있습니다. 시스템에 `OLLAMA_HOST=0.0.0.0` 같은 잘못된 값이 있어도 `.env`가 이깁니다.
+
+---
+
+## 7. 실행 방법
+
+### 기본 실행
+
+```powershell
+cd c:\dev2\metting_record
+python main.py "회의녹음.mp3"
+```
+
+진행 단계가 화면에 출력됩니다:
+```
+[1/6] 오디오 변환 (ffmpeg)
+[2/6] 음성 인식 + 화자 분리 (WhisperX medium, 분리: 로컬 (speechbrain))
+[3/6] 회의 요약 (Ollama gemma4:e4b)
+[4/6] SQLite 저장
+[5/6] 요약 미리보기
+[6/6] 그누보드5 업로드
+✓ 완료. meeting_id=1, 게시글 wr_id=8
+```
+
+### CLI 옵션
+
+```powershell
+# 화자 수를 강제 지정 (자동 추정 끄기)
+python main.py "회의.mp3" --speakers 3
+
+# 그누보드5 업로드 생략 (로컬 DB에만 저장)
+python main.py "회의.mp3" --no-upload
+
+# DB에 저장된 회의 조회
+python main.py --show 1
+
+# 업로드 실패한 회의 재전송
+python main.py --resync
+
+# 도움말
+python main.py --help
+```
+
+### 처리 시간 가이드 (CPU 환경)
+
+#### Whisper 모델 선택 (`.env` 의 `WHISPER_MODEL`)
+
+| 모델 | 크기 | 107분 오디오 STT 예상 | 한국어 정확도 |
+|------|------|----------------------|--------------|
+| `tiny` | 75MB | ~15분 | 낮음 (회의록 부적합) |
+| `base` | 150MB | ~25분 | 보통 |
+| **`small`** | **500MB** | **~40분** | **양호** (기본값, 권장) |
+| `medium` | 1.5GB | ~115분 | 매우 좋음 |
+| `large-v3` | 3GB | ~250분 | 최고 |
+
+#### LLM 모델 선택 (`.env` 의 `OLLAMA_MODEL`)
+
+| 모델 | 크기 | 171발화 요약 예상 | 품질 |
+|------|------|------------------|------|
+| `qwen3:4b` | 2.5GB | ~10분 | 양호 |
+| `gemma3:4b` | 3.3GB | ~12분 | 양호 |
+| `exaone3.5:7.8b` | 4.8GB | ~20분 | 한국어 특화, 좋음 |
+| **`gemma4:e2b`** | **7.7GB** | **~30분** | **매우 좋음** (기본값) |
+| `gemma4:e4b` | 9.6GB | 30분+ (긴 context 불가) | 짧은 회의만 |
+
+#### 추천 조합 (107분 회의 기준)
+
+| 우선순위 | Whisper | LLM | 총 예상 시간 |
+|---------|---------|-----|-------------|
+| **속도 최우선** | `small` | `qwen3:4b` | **~50분** |
+| **균형 (권장)** | `small` | `gemma4:e2b` | ~70분 |
+| 정확도 우선 | `medium` | `gemma4:e2b` | ~145분 |
+| 최고 품질 | `large-v3` | `exaone3.5:7.8b` | ~270분 |
+
+> **변경 후 모델 다운로드**: 새 Whisper 모델 사용 시 `python scripts/download_models.py` 실행 (또는 `WHISPER_DOWNLOAD_ALL=1` 환경변수로 전체 받기)
+
+#### CPU 최적화 추가 옵션
+
+`.env`에서 설정:
+```
+WHISPER_VAD_FILTER=1         # 무음 구간 사전 필터링 (5~15% 단축)
+WHISPER_CPU_THREADS=0        # 0=모든 코어 자동 사용
+WHISPER_BATCH_SIZE=8         # 메모리 여유 있으면 16으로
+```
+
+#### GPU(CUDA) 가속
+
+NVIDIA GPU가 있으면 STT가 **10~30배 빨라집니다**. 107분 회의가 **5~10분**에 끝납니다.
+
+**1단계: 시스템 진단**
+```powershell
+python doctor.py
+```
+출력에서 다음 확인:
+- `✓ CUDA available` 이면 바로 사용 가능 (3단계로 점프)
+- `! PyTorch는 CPU 전용 빌드입니다` 이면 2단계 실행 필요
+- `! nvidia-smi 없음` 이면 NVIDIA GPU 또는 드라이버 없음 → 하드웨어 추가 필요
+
+**2단계: PyTorch GPU 빌드 재설치**
+```powershell
+# 기존 CPU 버전 제거
+pip uninstall torch torchaudio torchvision -y
+
+# CUDA 12.1 버전 (대부분의 환경에 적합)
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# 또는 CUDA 11.8 (구형 GPU/드라이버)
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
+
+NVIDIA 드라이버는 NVIDIA 공식 사이트에서 받으세요. CUDA Toolkit은 PyTorch가 자체적으로 사용하므로 별도 설치 불필요합니다.
+
+**3단계: `.env`에서 활성화**
+```env
+DEVICE=auto                 # CUDA 자동 감지 (권장)
+# 또는 명시적으로
+# DEVICE=cuda
+
+WHISPER_MODEL=medium        # GPU에서는 medium/large-v3도 충분히 빠름
+WHISPER_COMPUTE_TYPE=       # 빈 값 = 자동 (cuda면 float16)
+WHISPER_BATCH_SIZE=16       # VRAM 8GB+ 권장, 12GB+면 32
+```
+
+**검증**
+```powershell
+python doctor.py            # DEVICE=cuda 표시 확인
+python main.py "회의.mp3"   # [info] DEVICE=cuda, compute_type=float16 출력
+```
+
+**GPU 권장 사양**
+| GPU | VRAM | 권장 Whisper | 처리 시간 (107분 회의) |
+|-----|------|-------------|----------------------|
+| GTX 1660 / RTX 2060 | 6GB | small | ~10분 |
+| RTX 3060 12GB | 12GB | medium | ~7분 |
+| RTX 4070 / 3080 | 12GB | large-v3 | ~6분 |
+| RTX 4090 / A100 | 24GB+ | large-v3 + batch_size 64 | ~3분 |
+
+**Fallback 동작**
+- `DEVICE=cuda` 지정했으나 PyTorch GPU 빌드 없음 → 자동으로 CPU fallback + 경고
+- `DEVICE=auto` (기본) → CUDA 가용 시 자동 사용, 아니면 CPU
+- 어떤 경우든 동작은 항상 보장됨
+
+> **첫 실행은 느림**: 모델 다운로드 (~6GB) + 모델 메모리 로딩으로 추가 시간 필요. 두 번째부터는 위 표 적용.
+
+### 결과 확인
+
+```powershell
+# 1) 로컬 SQLite
+python main.py --show 1
+
+# 2) 그누보드5 게시판 (브라우저)
+start http://127.0.0.1/gnuboard5/bbs/board.php?bo_table=metting
+
+# 3) 특정 회의 직접 보기
+start http://127.0.0.1/gnuboard5/bbs/board.php?bo_table=metting&wr_id=8
+```
+
+### 외부 디바이스에서 접속
+
+같은 Wi-Fi의 핸드폰/노트북에서:
+```
+http://<PC의-LAN-IP>/gnuboard5/bbs/board.php?bo_table=metting
+```
+
+PC의 IP 확인: `ipconfig` 명령 또는 `Get-NetIPAddress`
+
+### 화자 등록 (enrollment) — "사용자N" 대신 실제 이름
+
+한 번 사람의 음성을 등록해두면 이후 회의에서 자동으로 실제 이름이 매핑됩니다.
+
+**등록 방법 1: 외부 wav 파일로 등록**
+```powershell
+# 10초 이상의 깨끗한 음성 (한 사람만, 잡음 적게)
+python enroll.py add "장관님" samples/장관님.wav
+python enroll.py add "김부장님" samples/김부장.wav
+```
+
+**등록 방법 2: 기존 회의에서 자동 추출**
+
+이미 처리한 회의가 있다면 거기서 화자 샘플을 뽑을 수 있습니다:
+```powershell
+# meeting_id=5 의 "사용자3"의 가장 긴 단일 발화 → wav로 추출
+python enroll.py extract-from 5 사용자3 --out data/samples/장관님.wav --target 30
+# 그 wav로 등록
+python enroll.py add "장관님" data/samples/장관님.wav
+```
+
+**확인 / 관리**
+```powershell
+python enroll.py list                                    # 등록된 화자 목록
+python enroll.py test data/samples/test.wav              # 입력 음성이 누구인지 매칭 테스트
+python enroll.py delete "장관님"                          # 삭제
+```
+
+**자동 매칭**
+
+화자가 등록되어 있으면 `python main.py audio.mp3` 실행 시 다음과 같이 동작:
+
+1. 평소처럼 STT + 화자 분리 (clustering)
+2. 각 클러스터의 중심 임베딩을 등록된 화자들과 cosine 유사도 비교
+3. 임계값(기본 0.75) 이상 매칭되는 클러스터 → 실제 이름 사용
+4. 매칭 안 되는 클러스터 → `SPEAKER_00` → `사용자1` 폴백
+
+콘솔에 매칭 결과가 표시됩니다:
+```
+[info] 등록 화자 매칭: {0: '장관님', 2: '사회자'}
+```
+
+그누보드5 댓글에도 `회의_장관님`, `회의_사회자` 같은 작성자명으로 등록됩니다.
+
+> ⚠️ 한 회의에 한 사람을 매번 정확히 같은 라벨로 매핑하려면 30초 이상의 깨끗한 단일 발화 샘플이 좋습니다.
+
+### 회의록 검색 (FTS5)
+
+누적된 회의록을 키워드로 검색:
+
+```powershell
+python search.py "산업재해"                    # 회의 제목/요약 + 발화 동시 검색
+python search.py "지게차" --speaker 사용자3     # 특정 화자의 발화만
+python search.py "AI 도입" --meetings-only      # 회의 요약만
+python search.py "안전" --since 2026-01-01     # 이 날짜 이후
+python search.py --rebuild                      # FTS 인덱스 재구축 (스키마 변경 시)
+```
+
+**FTS5 쿼리 문법**:
+- `"단어 단어"` — AND (기본)
+- `"단어 OR 단어"` — OR
+- `"정확한 구문"` — 따옴표로 묶기
+- `"단어1 NEAR/5 단어2"` — 5단어 이내 근접
+- `"산업*"` — 접두사 와일드카드
+
+**한국어 검색 팁**: 토크나이저가 trigram이라 **최소 3글자** 검색이 가능합니다. 2글자(예: "산재")는 결과가 안 나올 수 있으니 "산업재해", "산재 사망" 처럼 longer 검색을 사용하세요.
+
+### 폴더 자동 감시 (watcher)
+
+CLI 명령을 매번 치는 대신, **특정 폴더에 음성 파일을 떨어뜨리기만 하면 자동 처리**됩니다.
+
+```powershell
+cd c:\dev2\metting_record
+python watcher.py
+```
+
+실행 후 `data\watch\` 폴더에 `.mp3`, `.m4a` 등 음성 파일을 드롭하면:
+1. 파일 크기 변화 감지 (5초간 안정 = 복사 완료로 판단)
+2. `main.py` 자동 실행 (`.env`의 `WATCH_SPEAKERS` 적용)
+3. STT → 화자 분리 → 요약 → DB → 그누보드5 업로드까지 자동 처리
+4. 처리 결과는 콘솔 + `data\watch.log`에 기록
+
+**핵심 설정 (`.env`)**:
+```
+WATCH_DIR=./data/watch          # 감시할 폴더
+WATCH_SPEAKERS=6                # 화자 수 (빈 값이면 자동 추정)
+WATCH_STABILITY_SEC=5           # 파일 안정 확인 시간
+WATCH_LOG=./data/watch.log      # 처리 이력
+```
+
+**활용 예시:**
+- 핸드폰 SMB 공유로 `data\watch\` 폴더에 직접 업로드 → 자동 처리
+- 회의 끝나고 PC에 파일 옮기기만 하면 됨 (CLI 명령 안 적어도 됨)
+- Windows 시작 시 watcher 자동 실행: 작업 스케줄러 등록
+
+**옵션 명령:**
+```powershell
+python watcher.py --scan-now    # 폴더의 기존 파일만 처리 후 종료
+```
+
+---
+
+## 8. 자주 발생하는 문제 (트러블슈팅)
+
+### 문제 1: "ffmpeg를 찾을 수 없습니다"
+
+**원인**: ffmpeg가 설치되지 않았거나 PATH에 없음.
+
+**해결**:
+```powershell
+winget install Gyan.FFmpeg --source winget
+# 새 PowerShell 창에서:
+ffmpeg -version
+```
+
+### 문제 2: "MariaDB가 자꾸 다운돼요"
+
+**원인**: XAMPP Control Panel이 외부에서 시작된 mysqld를 인식하지 못해 stale 상태로 표시하고, 사용자가 Start 버튼을 누르면 중복 실행을 시도해 첫 번째 인스턴스가 ibdata1 파일 잠금을 가진 채로 두 번째 인스턴스가 즉시 죽음.
+
+**증상**:
+- XAMPP Control Panel에 "Stopped" 표시
+- Start 누르면 잠깐 켜졌다가 즉시 죽음
+- 에러 로그에 `[ERROR] InnoDB: The innodb_system data file 'ibdata1' must be writable`
+
+**해결**:
+1. **현재 실행 중인지 확인**: `Get-Process mysqld`
+2. 살아있으면 Start 버튼 누르지 말 것
+3. **영구 해결책**: my.ini 의 pid_file을 절대 경로로 변경 (이미 적용됨):
+   ```ini
+   [mysqld]
+   pid_file="C:/xampp/mysql/data/mysql.pid"
+   ```
+4. **가장 안정적**: Windows 서비스로 등록 (관리자 권한 필요)
+
+### 문제 3: "Failed to connect to Ollama" (Python에서)
+
+**원인 A**: 시스템 환경변수 `OLLAMA_HOST=0.0.0.0`이 설정되어 있는데 Python이 이걸 가져다가 사용. `0.0.0.0`은 서버 바인드 주소이지 클라이언트 접속 주소가 아니므로 연결 실패.
+
+**해결 (이미 적용됨)**:
+- `config.py`의 `load_dotenv(override=True)`로 `.env` 우선
+- `_validated_ollama_host()` 함수가 `0.0.0.0` → `127.0.0.1` 자동 변환
+
+**원인 B**: STT 처리 중 CPU 100% 점유로 Ollama가 일시적으로 응답 못함.
+
+**해결**:
+- `summarizer.py`가 timeout 600초로 호출
+- STT 시작 전 Ollama warmup으로 모델 메모리 적재
+- 발화 캐시(`*.segments.json`) 덕분에 실패해도 재실행 시 STT 안 다시 함
+
+### 문제 4: "OSError [WinError 1314] symlink 권한 부족"
+
+**원인**: HuggingFace가 모델 다운로드 시 캐시에 심볼릭 링크를 만드는데, Windows 일반 사용자는 권한 없음.
+
+**해결 (이미 적용됨)**: `scripts/download_models.py`가 우리 프로젝트 폴더에 직접 다운로드 (심볼릭 링크 없이). `transcriber.py`는 로컬 폴더를 우선 사용.
+
+만약 다시 발생하면:
+```powershell
+python scripts\download_models.py
+```
+
+### 문제 5: "common.php 로드 시 mysqli 연결 실패"
+
+**원인**: 그누보드5 `common.php`는 `$_SERVER['SCRIPT_FILENAME']`을 기준으로 자기 경로를 계산하므로, 외부 폴더에서 require하면 경로 계산이 깨짐 → dbconfig.php를 못 찾음.
+
+**해결 (이미 적용됨)**: `_load_gnuboard5.php`가 `$_SERVER['SCRIPT_FILENAME']`을 임시로 그누보드5의 index.php 경로로 위장하고 require.
+
+### 문제 6: "그누보드5 게시판에 글이 안 보여요"
+
+**원인 A**: `metting` 게시판이 만들어지지 않음.
+
+**해결**: API 헬스 체크로 확인
+```powershell
+curl http://127.0.0.1/g5_metting_api/health.php
+# board_exists: true 인지 확인
+```
+
+`false`면 SQL로 생성:
+```sql
+SET SESSION sql_mode='';
+INSERT INTO g5_board SELECT * FROM g5_board WHERE bo_table='free';
+UPDATE g5_board SET bo_table='metting', bo_subject='회의록',
+    bo_count_write=0, bo_count_comment=0 WHERE bo_table='free' LIMIT 1;
+CREATE TABLE g5_write_metting LIKE g5_write_free;
+```
+
+**원인 B**: 비회원 글 작성이 막혀있음.
+
+**해결**: 그누보드5 관리자(`http://127.0.0.1/gnuboard5/adm/`)에서 metting 게시판의 글쓰기 권한을 "모두"로 변경.
+
+### 문제 7: "회의가 너무 길어서 요약이 잘려요"
+
+**원인**: 기본 Ollama context window가 4096 토큰. 긴 회의는 입력이 잘림.
+
+**해결 (이미 적용됨)**: `summarizer.py`가 transcript 길이를 보고 동적으로 num_ctx를 4096~128K 범위에서 자동 조정.
+
+---
+
+## 9. 운영 시 점검 사항
+
+### 보안
+
+1. **API 토큰 강화**: `c:\dev2\g5_metting_api\config.php`
+   ```php
+   define('METTING_API_TOKEN', '강력한-32자-이상-랜덤-문자열');
+   define('METTING_API_DEBUG', false);  // 디버그 정보 노출 차단
+   ```
+   동일 토큰을 `c:\dev2\metting_record\.env`의 `G5_API_TOKEN`에도 설정.
+
+   토큰 생성:
+   ```powershell
+   [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))
+   ```
+
+2. **그누보드5 관리자 계정**: 첫 가입 회원이 자동 최고관리자.
+   가입: `http://127.0.0.1/gnuboard5/bbs/register.php`
+
+3. **MariaDB root 비밀번호**: XAMPP 기본은 빈 값. 변경 권장.
+   ```sql
+   ALTER USER 'root'@'localhost' IDENTIFIED BY '새비밀번호';
+   ```
+
+### 백업 대상
+
+회의 데이터를 잃지 않으려면 정기 백업:
+
+| 항목 | 경로 | 주기 |
+|------|------|------|
+| 로컬 DB | `c:\dev2\metting_record\data\meetings.db` | 매주 |
+| 원본 음성 | `c:\dev2\metting_record\data\uploads\` | 매월 |
+| 그누보드5 DB | `metting` (MariaDB) | 매주 |
+| 그누보드5 첨부파일 | `c:\dev2\gnuboard5\data\file\metting\` | 매월 |
+
+MariaDB 백업:
+```powershell
+& "C:\xampp\mysql\bin\mysqldump.exe" -u root metting > backup.sql
+```
+
+### 디스크 공간
+
+장기 운영 시 디스크 사용 추정:
+
+| 항목 | 1회 평균 | 100회 누적 |
+|------|----------|------------|
+| AI 모델 (고정) | ~6GB | 6GB |
+| 원본 음성 (1시간) | ~60MB | 6GB |
+| WAV (1시간) | ~115MB | 11.5GB |
+| 캐시 JSON | ~50KB | 5MB |
+| DB | ~수십KB | ~수MB |
+
+→ 100회 회의 기준 약 **24GB**. 정기적으로 `data\work\*.wav` 정리 권장 (캐시 JSON은 유지).
+
+### 정기 점검 명령
+
+```powershell
+# 1. 모든 서비스 상태
+Get-Process mysqld, httpd, ollama -ErrorAction SilentlyContinue
+Invoke-WebRequest http://127.0.0.1:11434/api/version
+Invoke-WebRequest http://127.0.0.1/g5_metting_api/health.php
+
+# 2. 디스크 사용량
+Get-ChildItem c:\dev2\metting_record\data -Recurse |
+    Measure-Object -Property Length -Sum
+
+# 3. 미동기화 회의 확인
+python main.py --resync
+```
+
+---
+
+## 부록: 작업 흐름 도식 (전체)
+
+```
+[사용자]                              [PC]                                [브라우저]
+   │                                   │                                      │
+   │ 회의 녹음                          │                                      │
+   ├──────────────────────────────────►│                                      │
+   │                                   │ python main.py meeting.mp3           │
+   │                                   ├─►[1] ffmpeg: mp3→wav                 │
+   │                                   ├─►[2] WhisperX: 음성→텍스트            │
+   │                                   │      speechbrain: 화자 분리           │
+   │                                   ├─►[3] Ollama gemma4:e4b: 요약          │
+   │                                   ├─►[4] SQLite 저장                      │
+   │                                   ├─►[5] 콘솔에 미리보기 출력             │
+   │                                   ├─►[6] HTTP POST                       │
+   │                                   │      ↓                              │
+   │                                   │   PHP API → MariaDB INSERT          │
+   │                                   │                                      │
+   │ "완료. wr_id=8"                    │                                      │
+   │◄──────────────────────────────────┤                                      │
+   │                                   │                                      │
+   │ 브라우저에서 결과 확인              │                                      │
+   ├───────────────────────────────────────────────────────────────────────►│
+   │                                   │                                      ↓
+   │                                   │                            그누보드5 게시판
+   │                                   │                            회의록 게시글 + 댓글
+```
