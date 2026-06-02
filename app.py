@@ -17,7 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import streamlit as st
 
 from config import load_config
-from src import dictionary, exporter, stats, storage
+from src import comparator, dictionary, exporter, stats, storage
 
 
 st.set_page_config(page_title="회의록 관리", page_icon="📝", layout="wide")
@@ -40,7 +40,7 @@ def _fmt_dur(sec: float) -> str:
 
 
 # ── 사이드바: 페이지 선택 ─────────────────────────────────
-PAGES = ["📋 회의 목록", "🔍 검색", "📚 사전 관리", "👤 화자 등록"]
+PAGES = ["📋 회의 목록", "🔍 검색", "📊 비교", "📚 사전 관리", "👤 화자 등록"]
 with st.sidebar:
     st.title("📝 회의록 관리")
     page = st.radio("페이지", PAGES, label_visibility="collapsed")
@@ -270,6 +270,161 @@ def render_search():
 
 
 # ────────────────────────────────────────────────────────
+# 비교
+# ────────────────────────────────────────────────────────
+def render_compare():
+    st.header("📊 회의 비교 분석")
+    cfg = get_cfg()
+    storage.init_db(cfg.db_path)
+    meetings = storage.list_meetings(cfg.db_path, limit=200)
+    if not meetings:
+        st.info("저장된 회의가 없습니다.")
+        return
+
+    tab_pair, tab_timeline, tab_kw_trend, tab_sp_trend, tab_top = st.tabs(
+        ["두 회의 비교", "월별 통계", "키워드 추이", "화자 추이", "상위 키워드"]
+    )
+
+    label_map = {f"#{m['id']:>3} | {m['title'][:50]} ({m['created_at'][:10]})": m["id"] for m in meetings}
+    labels = list(label_map.keys())
+
+    with tab_pair:
+        col1, col2 = st.columns(2)
+        sel_a = col1.selectbox("회의 A", labels, key="cmp_a")
+        sel_b = col2.selectbox("회의 B", labels, index=min(1, len(labels)-1), key="cmp_b")
+        if sel_a == sel_b:
+            st.warning("서로 다른 두 회의를 선택하세요")
+        else:
+            id_a, id_b = label_map[sel_a], label_map[sel_b]
+            try:
+                result = comparator.compare_two(cfg.db_path, id_a, id_b)
+            except ValueError as e:
+                st.error(str(e))
+            else:
+                md = result["meta_diff"]
+                col1, col2 = st.columns(2)
+                with col1:
+                    ma = result["meetings"]["a"]
+                    st.markdown(f"**[A] #{id_a}** {ma['title']}")
+                    st.caption(f"{ma['created_at'][:10]} · {_fmt_dur(md['duration_sec_a'])} · 발화 {md['utterance_count_a']} · 화자 {md['speaker_count_a']}")
+                with col2:
+                    mb = result["meetings"]["b"]
+                    st.markdown(f"**[B] #{id_b}** {mb['title']}")
+                    st.caption(f"{mb['created_at'][:10]} · {_fmt_dur(md['duration_sec_b'])} · 발화 {md['utterance_count_b']} · 화자 {md['speaker_count_b']}")
+
+                st.divider()
+                sp = result["speakers"]
+                cols = st.columns(3)
+                cols[0].markdown("**공통 화자**")
+                cols[0].write(", ".join(sp["common"]) or "—")
+                cols[1].markdown("**A에만**")
+                cols[1].write(", ".join(sp["only_in_a"]) or "—")
+                cols[2].markdown("**B에만**")
+                cols[2].write(", ".join(sp["only_in_b"]) or "—")
+
+                st.divider()
+                kw = result["keywords"]
+                st.subheader("공통 핵심어 (상위 15)")
+                if kw["shared"]:
+                    st.dataframe(
+                        [{"단어": w, "A": na, "B": nb, "합계": na+nb} for w, na, nb in kw["shared"][:15]],
+                        use_container_width=True, hide_index=True,
+                    )
+                else:
+                    st.caption("공통 키워드 없음")
+
+                col1, col2 = st.columns(2)
+                col1.subheader("A에만 자주")
+                col1.dataframe(
+                    [{"단어": w, "횟수": n} for w, n in kw["only_a"][:15]],
+                    use_container_width=True, hide_index=True,
+                ) if kw["only_a"] else col1.caption("없음")
+                col2.subheader("B에만 자주")
+                col2.dataframe(
+                    [{"단어": w, "횟수": n} for w, n in kw["only_b"][:15]],
+                    use_container_width=True, hide_index=True,
+                ) if kw["only_b"] else col2.caption("없음")
+
+    with tab_timeline:
+        col1, col2 = st.columns(2)
+        since = col1.text_input("시작 (YYYY-MM-DD)", key="tl_since")
+        until = col2.text_input("종료 (YYYY-MM-DD)", key="tl_until")
+        rows = comparator.timeline_stats(cfg.db_path, since=since or None, until=until or None)
+        if not rows:
+            st.info("기간 내 회의 없음")
+        else:
+            st.dataframe(
+                [{
+                    "월": r["month"], "회의 수": r["count"],
+                    "총 길이": _fmt_dur(r["total_sec"]),
+                    "평균": _fmt_dur(r["avg_sec"]),
+                    "총 발화": r["utterance_count"],
+                } for r in rows],
+                use_container_width=True, hide_index=True,
+            )
+            st.subheader("월별 회의 수")
+            st.bar_chart({r["month"]: r["count"] for r in rows})
+            st.subheader("월별 총 발화 수")
+            st.bar_chart({r["month"]: r["utterance_count"] for r in rows})
+
+    with tab_kw_trend:
+        kw = st.text_input("키워드", placeholder="예: 산업재해 / 안전 / 지게차", key="kt_kw")
+        col1, col2 = st.columns(2)
+        since = col1.text_input("시작 (YYYY-MM-DD)", key="kt_since")
+        until = col2.text_input("종료 (YYYY-MM-DD)", key="kt_until")
+        if kw:
+            rows = comparator.keyword_trend(cfg.db_path, kw, since=since or None, until=until or None)
+            if rows:
+                st.dataframe(
+                    [{"월": r["month"], "회의 수": r["meeting_count"], "등장 횟수": r["occurrence_count"]} for r in rows],
+                    use_container_width=True, hide_index=True,
+                )
+                st.bar_chart({r["month"]: r["occurrence_count"] for r in rows})
+            else:
+                st.info(f"'{kw}' 등장한 회의 없음")
+
+    with tab_sp_trend:
+        all_speakers = set()
+        with storage.connect(cfg.db_path) as conn:
+            for r in conn.execute("SELECT DISTINCT speaker FROM utterances ORDER BY speaker").fetchall():
+                all_speakers.add(r["speaker"])
+        if not all_speakers:
+            st.info("화자 데이터 없음")
+        else:
+            sp = st.selectbox("화자", sorted(all_speakers), key="st_sp")
+            col1, col2 = st.columns(2)
+            since = col1.text_input("시작 (YYYY-MM-DD)", key="st_since")
+            until = col2.text_input("종료 (YYYY-MM-DD)", key="st_until")
+            rows = comparator.speaker_trend(cfg.db_path, sp, since=since or None, until=until or None)
+            if rows:
+                st.dataframe(
+                    [{
+                        "월": r["month"], "참여 회의": r["meeting_count"],
+                        "발화 수": r["utterance_count"], "발언 시간": _fmt_dur(r["total_sec"]),
+                    } for r in rows],
+                    use_container_width=True, hide_index=True,
+                )
+                st.bar_chart({r["month"]: r["utterance_count"] for r in rows})
+
+    with tab_top:
+        st.caption("회의의 상위 한국어 키워드 (단순 빈도 + 흔한 조사/어미 제외)")
+        sel = st.selectbox("회의 선택", labels, key="top_sel")
+        meeting_id = label_map[sel]
+        data = storage.get_meeting(cfg.db_path, meeting_id)
+        if data:
+            texts = [u["text"] for u in data["utterances"]]
+            n_top = st.slider("표시 개수", 10, 100, 30, step=10)
+            kws = comparator.top_keywords(texts, top_n=n_top)
+            if kws:
+                col1, col2 = st.columns([1, 1])
+                col1.dataframe(
+                    [{"단어": w, "횟수": n} for w, n in kws],
+                    use_container_width=True, hide_index=True,
+                )
+                col2.bar_chart({w: n for w, n in kws[:20]}, horizontal=True)
+
+
+# ────────────────────────────────────────────────────────
 # 사전 관리
 # ────────────────────────────────────────────────────────
 def render_dictionary():
@@ -350,6 +505,8 @@ if page == "📋 회의 목록":
     render_meeting_list()
 elif page == "🔍 검색":
     render_search()
+elif page == "📊 비교":
+    render_compare()
 elif page == "📚 사전 관리":
     render_dictionary()
 elif page == "👤 화자 등록":
