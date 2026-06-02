@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from config import load_config
-from src import audio, dictionary, notifier, storage, summarizer, transcriber
+from src import audio, dictionary, notifier, pii, storage, summarizer, transcriber
 from src.g5_client import G5ApiError, G5MettingApiClient, format_utterance_comment
 
 
@@ -108,6 +108,11 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         segments, n_fixed = dictionary.apply_to_segments(cfg.db_path, segments)
         if n_fixed > 0:
             print(f"    → 사전 치환 적용: {n_fixed}건")
+        # PII 마스킹 (PII_MASK_LEVEL 설정 시)
+        if pii.is_enabled():
+            segments, n_masked = pii.mask_segments(segments)
+            if n_masked > 0:
+                print(f"    → PII 마스킹 적용: {n_masked}건 발화")
         segments = transcriber.remap_speakers(segments)
         segments = transcriber.merge_consecutive(segments)
         # 캐시 저장 (다음 실패 시 재사용)
@@ -123,6 +128,10 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     summary = summarizer.summarize(
         segments, model=cfg.ollama_model, host=cfg.ollama_host
     )
+    # 요약 본문에도 마스킹 (LLM이 발화의 번호를 그대로 옮길 가능성)
+    if pii.is_enabled():
+        summary["summary_md"] = pii.mask_text(summary["summary_md"])
+        summary["title"] = pii.mask_text(summary["title"])
     print(f"    → 제목: {summary['title']} ({time.time()-t0:.1f}s)")
 
     # 4) DB 저장

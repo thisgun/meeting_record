@@ -486,6 +486,47 @@ http://<PC의-LAN-IP>/gnuboard5/bbs/board.php?bo_table=metting
 
 PC의 IP 확인: `ipconfig` 명령 또는 `Get-NetIPAddress`
 
+### 민감 정보(PII) 자동 마스킹
+
+회의 중 의도치 않게 노출되는 개인정보(주민번호/휴대폰/카드/계좌/이메일/일반전화)를 자동으로 가립니다.
+
+**`.env` 설정**:
+```env
+PII_MASK_LEVEL=off       # 기본값 (마스킹 안 함)
+# PII_MASK_LEVEL=partial # 일부 가림: 901234-1****67
+# PII_MASK_LEVEL=full    # 라벨 대체: [주민번호]
+```
+
+**처리 시점**: STT 후 + 요약 후 자동 적용 (발화와 요약 본문 모두). 그누보드5에 등록되는 댓글/게시글도 자동으로 마스킹된 결과가 올라갑니다.
+
+**예시 (partial)**:
+- `010-1234-5678` → `010-****-**78`
+- `hong.gildong@example.com` → `h**********g@example.com`
+- `901234-1234567` → `901234-1****67`
+- `1234-5678-9012-3456` → `1234-****-****-3456`
+
+### 데이터 자동 백업
+
+```powershell
+# 수동 실행
+python scripts/backup.py                            # ./data/backups/<날짜>/ 로 백업
+python scripts/backup.py --out D:\backup            # 출력 폴더 지정
+python scripts/backup.py --keep 14                  # 14일 초과 백업 자동 삭제
+python scripts/backup.py --no-mysql                 # SQLite만
+```
+
+**Windows 작업 스케줄러로 자동화** (관리자 PowerShell):
+```powershell
+schtasks /create /tn "MettingBackup" /sc DAILY /st 03:00 `
+    /tr "python c:\dev2\metting_record\scripts\backup.py --keep 30"
+```
+
+매일 새벽 3시에 자동 백업 + 30일 초과 자동 정리.
+
+백업 내용:
+- `meetings.db` (SQLite, sqlite3.backup() API로 안전한 복사)
+- `metting.sql` (MariaDB mysqldump, 트리거/이벤트/루틴 포함)
+
 ### 회의록 export (Word / HTML)
 
 ```powershell
