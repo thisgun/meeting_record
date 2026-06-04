@@ -175,15 +175,15 @@ def cmd_apply_to_meeting(args) -> int:
             if title_changed or md_changed:
                 esc_t = new_title.replace("\\", "\\\\").replace("'", "''")
                 esc_c = new_md.replace("\\", "\\\\").replace("'", "''")
-                f.write(f"UPDATE g5_write_metting SET wr_subject='{esc_t}', wr_content='{esc_c}' WHERE wr_id={wr_id};\n")
+                f.write(f"UPDATE g5_write_meeting SET wr_subject='{esc_t}', wr_content='{esc_c}' WHERE wr_id={wr_id};\n")
             # 댓글들도 ORDER BY wr_id로 매핑 가능
             f.write(f"-- comments will be matched in Python loop\n")
 
         # 댓글은 Python에서 처리 (개수/순서 정밀 매칭)
         if n_changed > 0:
             result = subprocess.run(
-                [mysql, "-u", "root", "metting", "-N", "-B", "-e",
-                 f"SELECT wr_id FROM g5_write_metting WHERE wr_parent={wr_id} AND wr_is_comment=1 ORDER BY wr_id"],
+                [mysql, "-u", "root", "meeting", "-N", "-B", "-e",
+                 f"SELECT wr_id FROM g5_write_meeting WHERE wr_parent={wr_id} AND wr_is_comment=1 ORDER BY wr_id"],
                 capture_output=True, text=True, encoding="utf-8",
             )
             comment_ids = [int(x) for x in result.stdout.strip().split("\n") if x]
@@ -195,12 +195,12 @@ def cmd_apply_to_meeting(args) -> int:
                     mm, sec = divmod(int(new["start"]), 60)
                     new_content = f"[{mm:02d}:{sec:02d}] {new['speaker']}: {new['text']}"
                     esc = new_content.replace("\\", "\\\\").replace("'", "''")
-                    updates.append(f"UPDATE g5_write_metting SET wr_content='{esc}' WHERE wr_id={cid};")
+                    updates.append(f"UPDATE g5_write_meeting SET wr_content='{esc}' WHERE wr_id={cid};")
             with open(sql_path, "a", encoding="utf-8") as f:
                 f.write("\n".join(updates))
 
         subprocess.run(
-            [mysql, "-u", "root", "metting", "--default-character-set=utf8mb4"],
+            [mysql, "-u", "root", "meeting", "--default-character-set=utf8mb4"],
             stdin=open(sql_path, encoding="utf-8"),
             capture_output=True, text=True, encoding="utf-8",
         )

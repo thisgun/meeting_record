@@ -55,8 +55,8 @@ def _update_via_mysql_cli(parent_wr_id: int, utterances: list[dict]) -> int:
     # 그누보드5의 댓글 wr_id 가져오기 (시간순)
     mysql = r"C:\xampp\mysql\bin\mysql.exe"
     fetch = subprocess.run(
-        [mysql, "-u", "root", "metting", "-N", "-B", "-e",
-         f"SELECT wr_id FROM g5_write_metting WHERE wr_parent={parent_wr_id} AND wr_is_comment=1 ORDER BY wr_id"],
+        [mysql, "-u", "root", "meeting", "-N", "-B", "-e",
+         f"SELECT wr_id FROM g5_write_meeting WHERE wr_parent={parent_wr_id} AND wr_is_comment=1 ORDER BY wr_id"],
         capture_output=True, text=True, encoding="utf-8",
     )
     if fetch.returncode != 0:
@@ -72,7 +72,7 @@ def _update_via_mysql_cli(parent_wr_id: int, utterances: list[dict]) -> int:
     updates = []
     for wr_id, utt in zip(comment_ids, utterances):
         author = f"회의_{utt['speaker']}".replace("'", "''")
-        updates.append(f"UPDATE g5_write_metting SET wr_name='{author}' WHERE wr_id={wr_id};")
+        updates.append(f"UPDATE g5_write_meeting SET wr_name='{author}' WHERE wr_id={wr_id};")
 
     # 임시 SQL 파일에 작성 후 실행 (긴 명령 회피)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False, encoding="utf-8") as f:
@@ -81,7 +81,7 @@ def _update_via_mysql_cli(parent_wr_id: int, utterances: list[dict]) -> int:
 
     try:
         result = subprocess.run(
-            [mysql, "-u", "root", "metting", "--default-character-set=utf8mb4"],
+            [mysql, "-u", "root", "meeting", "--default-character-set=utf8mb4"],
             stdin=open(sql_path, encoding="utf-8"),
             capture_output=True, text=True, encoding="utf-8",
         )

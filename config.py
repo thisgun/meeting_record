@@ -118,7 +118,7 @@ def load_config() -> Config:
         whisper_vad_filter=os.getenv("WHISPER_VAD_FILTER", "1") not in ("0", "false", "False", ""),
         g5_api_base=os.getenv("G5_API_BASE", "").rstrip("/"),
         g5_api_token=os.getenv("G5_API_TOKEN", ""),
-        g5_bo_table=os.getenv("G5_BO_TABLE", "metting"),
+        g5_bo_table=os.getenv("G5_BO_TABLE", "meeting"),
         db_path=_path("DB_PATH", "./data/meetings.db"),
         work_dir=_path("WORK_DIR", "./data/work"),
         upload_dir=_path("UPLOAD_DIR", "./data/uploads"),

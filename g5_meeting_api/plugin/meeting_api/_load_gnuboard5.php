@@ -6,7 +6,7 @@
  * 호출자 쪽에서 빈 배열을 보게 된다. 이 파일을 endpoint에서 require하여
  * endpoint의 전역 스코프에 변수들을 정의시킨다.
  */
-if (defined('METTING_G5_LOADED')) return;
+if (defined('meeting_G5_LOADED')) return;
 
 if (!defined('G5_PATH_OVERRIDE')) {
     require_once __DIR__ . '/config.php';
@@ -46,8 +46,8 @@ $_SERVER['SCRIPT_FILENAME'] = $__saved_script_filename;
 $_SERVER['SCRIPT_NAME'] = $__saved_script_name;
 $_SERVER['PHP_SELF'] = $__saved_php_self;
 
-if ($__g5_output !== '' && defined('METTING_API_DEBUG') && METTING_API_DEBUG) {
-    error_log("[g5_metting_api] common.php stray output: " . substr($__g5_output, 0, 500));
+if ($__g5_output !== '' && defined('meeting_API_DEBUG') && meeting_API_DEBUG) {
+    error_log("[g5_meeting_api] common.php stray output: " . substr($__g5_output, 0, 500));
 }
 
-define('METTING_G5_LOADED', true);
+define('meeting_G5_LOADED', true);

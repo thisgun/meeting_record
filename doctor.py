@@ -212,15 +212,15 @@ def check_xampp():
     section("XAMPP (MariaDB / Apache / PHP)")
     try:
         import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1/gnuboard5/plugin/metting_api/health.php", timeout=3) as r:
+        with urllib.request.urlopen("http://127.0.0.1/gnuboard5/plugin/meeting_api/health.php", timeout=3) as r:
             import json
             data = json.loads(r.read())
             if data.get("ok"):
-                ok("g5_metting_api health", f"PHP {data.get('php_version')}, DB={data.get('db_connected')}, board={data.get('board_exists')}")
+                ok("g5_meeting_api health", f"PHP {data.get('php_version')}, DB={data.get('db_connected')}, board={data.get('board_exists')}")
             else:
                 warn("API health 응답에 ok=false", str(data)[:200])
     except Exception as e:
-        warn("g5_metting_api 접속 실패", "Apache 또는 MariaDB가 중지된 상태일 수 있음")
+        warn("g5_meeting_api 접속 실패", "Apache 또는 MariaDB가 중지된 상태일 수 있음")
 
 
 def check_g5_targets():

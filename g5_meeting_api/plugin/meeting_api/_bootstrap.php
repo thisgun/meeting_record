@@ -14,7 +14,7 @@ header('X-Content-Type-Options: nosniff');
 require_once __DIR__ . '/config.php';
 
 // 에러 표시
-if (defined('METTING_API_DEBUG') && METTING_API_DEBUG) {
+if (defined('meeting_API_DEBUG') && meeting_API_DEBUG) {
     error_reporting(E_ALL);
     ini_set('display_errors', '1');
 } else {
@@ -67,14 +67,14 @@ function require_auth() {
     $token = $headers_lower['x-api-token']
         ?? ($_SERVER['HTTP_X_API_TOKEN'] ?? '');
 
-    $is_default = (METTING_API_TOKEN === 'change-me-please-use-strong-random-token');
-    if (!METTING_API_TOKEN) {
+    $is_default = (meeting_API_TOKEN === 'change-me-please-use-strong-random-token');
+    if (!meeting_API_TOKEN) {
         api_error(500, 'Server misconfigured: API token is empty in config.php');
     }
-    if ($is_default && !METTING_API_DEBUG) {
-        api_error(500, 'Server misconfigured: default API token used in production. Change METTING_API_TOKEN in config.php.');
+    if ($is_default && !meeting_API_DEBUG) {
+        api_error(500, 'Server misconfigured: default API token used in production. Change meeting_API_TOKEN in config.php.');
     }
-    if (!hash_equals(METTING_API_TOKEN, $token)) {
+    if (!hash_equals(meeting_API_TOKEN, $token)) {
         api_error(401, 'Invalid or missing X-API-Token');
     }
 }

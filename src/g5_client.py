@@ -1,6 +1,6 @@
 """그누보드5 metting API 클라이언트.
 
-c:\\dev2\\g5_metting_api\\ 의 PHP endpoint에 HTTP로 회의 게시글/댓글을 등록한다.
+c:\\dev2\\g5_meeting_api\\ 의 PHP endpoint에 HTTP로 회의 게시글/댓글을 등록한다.
 
 멀티 타겟 지원 (로컬 + 원격 동시 등록):
     G5MultiClient([G5MettingApiClient(local), G5MettingApiClient(remote)])
@@ -19,9 +19,9 @@ def build_clients_from_env(cfg) -> list["G5MettingApiClient"]:
 
     .env 옵션:
         G5_TARGETS=local,remote     ← 멀티 타겟 활성화 (지정한 prefix들의 설정 사용)
-        G5_API_BASE_LOCAL=http://127.0.0.1/g5_metting_api
+        G5_API_BASE_LOCAL=http://127.0.0.1/g5_meeting_api
         G5_API_TOKEN_LOCAL=...
-        G5_API_BASE_REMOTE=https://thisgun01.mycafe24.com/g5_metting_api
+        G5_API_BASE_REMOTE=https://thisgun01.mycafe24.com/g5_meeting_api
         G5_API_TOKEN_REMOTE=...
 
     G5_TARGETS 가 비어있으면 기존 단일 설정 (G5_API_BASE, G5_API_TOKEN) 사용.
@@ -72,13 +72,13 @@ class G5ClientBase(ABC):
 
 
 class G5MettingApiClient(G5ClientBase):
-    """c:\\dev2\\g5_metting_api 의 PHP endpoint 호출용."""
+    """c:\\dev2\\g5_meeting_api 의 PHP endpoint 호출용."""
 
     def __init__(
         self,
         api_base: str,
         api_token: str,
-        bo_table: str = "metting",
+        bo_table: str = "meeting",
         *,
         timeout: float = 30.0,
         max_retries: int = 2,
@@ -178,9 +178,9 @@ if __name__ == "__main__":
 
     load_dotenv()
     client = G5MettingApiClient(
-        api_base=os.getenv("G5_API_BASE", "http://127.0.0.1/g5_metting_api"),
+        api_base=os.getenv("G5_API_BASE", "http://127.0.0.1/g5_meeting_api"),
         api_token=os.getenv("G5_API_TOKEN", ""),
-        bo_table=os.getenv("G5_BO_TABLE", "metting"),
+        bo_table=os.getenv("G5_BO_TABLE", "meeting"),
     )
 
     cmd = sys.argv[1] if len(sys.argv) > 1 else "health"

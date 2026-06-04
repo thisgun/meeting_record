@@ -71,7 +71,7 @@ def main() -> int:
         try:
             post = c.create_post(
                 subject="[연결 테스트] 삭제해 주세요",
-                content="g5_metting_api 연결 점검용. 확인 후 삭제하세요.",
+                content="g5_meeting_api 연결 점검용. 확인 후 삭제하세요.",
             )
             wr_id = post["wr_id"]
             print(f"  ✓ 게시글 생성 OK: wr_id={wr_id}")

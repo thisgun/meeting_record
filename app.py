@@ -217,7 +217,7 @@ def render_meeting_detail(meeting_id: int):
         st.divider()
         st.caption("그누보드5 게시판 링크")
         if m["remote_post_id"]:
-            g5_url = f"{cfg.g5_api_base.replace('/g5_metting_api','')}/gnuboard5/bbs/board.php?bo_table={cfg.g5_bo_table}&wr_id={m['remote_post_id']}"
+            g5_url = f"{cfg.g5_api_base.replace('/g5_meeting_api','')}/gnuboard5/bbs/board.php?bo_table={cfg.g5_bo_table}&wr_id={m['remote_post_id']}"
             st.link_button("🔗 그누보드5에서 보기", g5_url)
         else:
             st.info("그누보드5에 미등록 — `python main.py --resync` 실행")

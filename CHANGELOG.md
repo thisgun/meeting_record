@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-04
+
+### 변경 (Breaking)
+- 게시판 코드 `metting` → `meeting` 으로 일괄 변경
+  - 새 게시판 `meeting` + 새 테이블 `g5_write_meeting` 자동 생성
+  - 기존 `metting` 데이터는 보존 (롤백 가능)
+- PHP 플러그인 폴더: `plugin/metting_api/` → `plugin/meeting_api/`
+- PHP 상수: `METTING_*` → `MEETING_*` (API_TOKEN, BO_TABLE 등)
+- 환경 변수 기본값: `G5_BO_TABLE=meeting`, `G5_API_BASE` 새 경로
+- 저장소 폴더: `g5_metting_api/` → `g5_meeting_api/`
+- ZIP 패키지 이름: `g5_meeting_api-vX.Y.Z.zip`
+
+### 마이그레이션 (v0.1.0 → v0.2.0)
+1. SQL: `scripts/migrate_metting_to_meeting.sql` 1회 실행
+2. PHP: 원격 그누보드5의 `plugin/metting_api/` 폴더 옆에 `plugin/meeting_api/` 업로드
+3. .env: `G5_API_BASE` URL과 `G5_BO_TABLE=meeting` 으로 변경
+
+### 안내
+프로젝트명/디렉토리명/GitHub 저장소명에 남은 `metting`(오타)은 호환성 유지를 위해 유지합니다.
+
 ## [0.1.0] - 2026-06-04
 
 첫 공개 릴리스.
@@ -40,6 +60,6 @@
 - 멀티 G5 타겟 (로컬 + 원격 동시 등록)
 
 ### 그누보드5 통합
-- 표준 plugin/metting_api/ 디렉토리 배치 (원본 무수정)
+- 표준 plugin/meeting_api/ 디렉토리 배치 (원본 무수정)
 - 게시판 자동 생성 스크립트
 - 환경별 토큰 분리 (config.local.php)

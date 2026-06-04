@@ -1,11 +1,11 @@
 <?php
 /**
- * POST /g5_metting_api/comment.php
+ * POST /g5_meeting_api/comment.php
  *
  * 회의 발화 1건을 댓글로 작성한다.
  *
  * 요청 헤더: X-API-Token: <토큰> / Content-Type: application/json
- * 요청 바디:  { "wr_id": 123, "content": "...", "bo_table": "metting" }
+ * 요청 바디:  { "wr_id": 123, "content": "...", "bo_table": "meeting" }
  * 응답:      { "ok": true, "comment_id": 456 }
  *
  * 참고: 그누보드5 common.php가 글로벌 $bo_table, $wr_id를 덮어쓰므로
@@ -18,7 +18,7 @@ require_auth();
 $m_body = read_json_body();
 $m_wr_id = (int)($m_body['wr_id'] ?? 0);
 $m_content = (string)($m_body['content'] ?? '');
-$m_bo_table = trim((string)($m_body['bo_table'] ?? METTING_BO_TABLE));
+$m_bo_table = trim((string)($m_body['bo_table'] ?? meeting_BO_TABLE));
 $m_author_name = trim((string)($m_body['author_name'] ?? ''));  // 선택: 화자별 작성자명
 
 if ($m_wr_id <= 0) api_error(400, 'wr_id (int, > 0) is required');
@@ -43,12 +43,12 @@ $tmp_comment = (int)($row['max_comment'] ?? 0) + 1;
 
 $wr_content = addslashes($m_content);
 // 화자별 작성자명: 요청에 author_name 있으면 사용, 없으면 기본값
-$effective_name = $m_author_name !== '' ? $m_author_name : METTING_WR_NAME;
+$effective_name = $m_author_name !== '' ? $m_author_name : meeting_WR_NAME;
 $wr_name = addslashes(mb_substr($effective_name, 0, 50, 'UTF-8'));
-$wr_password = METTING_WR_PASSWORD ? sql_password(METTING_WR_PASSWORD) : '';
-$wr_email = addslashes(METTING_WR_EMAIL);
-$wr_homepage = addslashes(METTING_WR_HOMEPAGE);
-$mb_id_esc = addslashes(METTING_MB_ID);
+$wr_password = meeting_WR_PASSWORD ? sql_password(meeting_WR_PASSWORD) : '';
+$wr_email = addslashes(meeting_WR_EMAIL);
+$wr_homepage = addslashes(meeting_WR_HOMEPAGE);
+$mb_id_esc = addslashes(meeting_MB_ID);
 $ca_name = addslashes($parent['ca_name'] ?? '');
 $wr_num = (int)$parent['wr_num'];
 $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';

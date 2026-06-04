@@ -55,7 +55,7 @@ def backup_sqlite(db_path: Path, out_dir: Path) -> Path | None:
         return None
 
 
-def backup_mariadb(out_dir: Path, db_name: str = "metting") -> Path | None:
+def backup_mariadb(out_dir: Path, db_name: str = "meeting") -> Path | None:
     """MariaDB metting DB 덤프 (mysqldump)."""
     if not Path(MYSQL_DUMP).exists():
         print(f"[skip] mysqldump 없음: {MYSQL_DUMP}")

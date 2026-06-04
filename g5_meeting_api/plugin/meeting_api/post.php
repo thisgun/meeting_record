@@ -1,6 +1,6 @@
 <?php
 /**
- * POST /g5_metting_api/post.php
+ * POST /g5_meeting_api/post.php
  *
  * 회의 요약을 게시글로 작성한다.
  *
@@ -12,7 +12,7 @@
  *   {
  *     "subject": "회의 제목",
  *     "content": "마크다운 본문",
- *     "bo_table": "metting"   // 선택, 미지정 시 config의 METTING_BO_TABLE
+ *     "bo_table": "meeting"   // 선택, 미지정 시 config의 meeting_BO_TABLE
  *   }
  *
  * 응답: { "ok": true, "wr_id": 123, "url": "..." }
@@ -27,11 +27,11 @@ require_auth();
 $m_body = read_json_body();
 $m_subject = trim((string)($m_body['subject'] ?? ''));
 $m_content = (string)($m_body['content'] ?? '');
-$m_bo_table = trim((string)($m_body['bo_table'] ?? METTING_BO_TABLE));
+$m_bo_table = trim((string)($m_body['bo_table'] ?? meeting_BO_TABLE));
 
 if ($m_subject === '') api_error(400, 'subject is required');
 if ($m_content === '') api_error(400, 'content is required');
-if ($m_bo_table === '') api_error(400, 'bo_table is required (and METTING_BO_TABLE not set)');
+if ($m_bo_table === '') api_error(400, 'bo_table is required (and meeting_BO_TABLE not set)');
 
 require_once __DIR__ . '/_load_gnuboard5.php';
 
@@ -40,11 +40,11 @@ $write_table = write_table_of($m_bo_table);
 
 $wr_subject = addslashes(mb_substr($m_subject, 0, 255, 'UTF-8'));
 $wr_content = addslashes($m_content);
-$wr_name = addslashes(METTING_WR_NAME);
-$wr_password = METTING_WR_PASSWORD ? sql_password(METTING_WR_PASSWORD) : '';
-$wr_email = addslashes(METTING_WR_EMAIL);
-$wr_homepage = addslashes(METTING_WR_HOMEPAGE);
-$mb_id_esc = addslashes(METTING_MB_ID);
+$wr_name = addslashes(meeting_WR_NAME);
+$wr_password = meeting_WR_PASSWORD ? sql_password(meeting_WR_PASSWORD) : '';
+$wr_email = addslashes(meeting_WR_EMAIL);
+$wr_homepage = addslashes(meeting_WR_HOMEPAGE);
+$mb_id_esc = addslashes(meeting_MB_ID);
 $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
 $now = G5_TIME_YMDHIS;
 $bo_table_esc = addslashes($m_bo_table);

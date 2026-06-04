@@ -83,9 +83,9 @@ def main(meeting_id: int) -> int:
             sql_path = f.name
             esc_title = fixed["title"].replace("\\", "\\\\").replace("'", "''")
             esc_content = fixed["summary_md"].replace("\\", "\\\\").replace("'", "''")
-            f.write(f"UPDATE g5_write_metting SET wr_subject='{esc_title}', wr_content='{esc_content}' WHERE wr_id={wr_id};")
+            f.write(f"UPDATE g5_write_meeting SET wr_subject='{esc_title}', wr_content='{esc_content}' WHERE wr_id={wr_id};")
         result = subprocess.run(
-            [mysql, "-u", "root", "metting", "--default-character-set=utf8mb4"],
+            [mysql, "-u", "root", "meeting", "--default-character-set=utf8mb4"],
             stdin=open(sql_path, encoding="utf-8"),
             capture_output=True, text=True, encoding="utf-8",
         )
