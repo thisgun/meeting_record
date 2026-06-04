@@ -66,12 +66,22 @@ def check_pytorch():
                 vram = props.total_memory / 1024 ** 3
                 ok(f"  GPU {i}", f"{name} ({vram:.1f} GB)")
         else:
-            if "+cpu" in torch.__version__:
-                warn("PyTorch는 CPU 전용 빌드입니다",
-                     "GPU 사용하려면: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121")
+            has_nvidia = shutil.which("nvidia-smi") is not None
+            cpu_build = "+cpu" in torch.__version__
+            if has_nvidia and cpu_build:
+                warn(
+                    "NVIDIA GPU가 감지됐지만 PyTorch가 CPU 전용 빌드라 GPU를 못 씁니다",
+                    "GPU 가속(선택): pip uninstall -y torch torchaudio torchvision  &&  "
+                    "pip install torch torchaudio torchvision "
+                    "--index-url https://download.pytorch.org/whl/cu128   "
+                    "(다른 CUDA/OS는 https://pytorch.org/get-started/locally/ 참고)",
+                )
+            elif has_nvidia:
+                warn("CUDA 사용 불가 (GPU는 감지됨)",
+                     "NVIDIA 드라이버 업데이트 또는 PyTorch GPU 빌드 재설치 필요")
             else:
-                warn("CUDA 사용 불가",
-                     "NVIDIA 드라이버 또는 CUDA Toolkit 미설치 가능성")
+                ok("CPU 모드로 동작",
+                   "NVIDIA GPU 없음 — 정상입니다. (GPU 가속은 선택 사항)")
     except ImportError as e:
         fail("torch import 실패", str(e))
 

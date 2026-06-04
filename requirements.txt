@@ -1,6 +1,10 @@
 whisperx>=3.1.0
 faster-whisper>=1.0.0
 pyannote.audio>=3.1.0
+
+# PyTorch — 여기서는 CPU 빌드가 설치됩니다(모든 환경에서 동작, GPU 불필요).
+# NVIDIA GPU 가속은 '선택 사항'이며, 설치 후 README의 "GPU(CUDA) 가속" 절에 따라
+# CUDA 빌드로 교체하세요. (환경별 CUDA 버전이 달라 requirements에 고정하지 않습니다.)
 torch>=2.0.0
 torchaudio>=2.0.0
 

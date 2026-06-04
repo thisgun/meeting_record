@@ -493,19 +493,18 @@ python doctor.py
 - `! PyTorch는 CPU 전용 빌드입니다` 이면 2단계 실행 필요
 - `! nvidia-smi 없음` 이면 NVIDIA GPU 또는 드라이버 없음 → 하드웨어 추가 필요
 
-**2단계: PyTorch GPU 빌드 재설치**
+**2단계: PyTorch GPU 빌드 재설치** (venv 활성화 상태에서)
 ```powershell
-# 기존 CPU 버전 제거
-pip uninstall torch torchaudio torchvision -y
+# 기존 CPU 버전 제거 (torchvision도 반드시 함께 — 안 그러면 whisperx/pyannote가 깨집니다)
+pip uninstall -y torch torchaudio torchvision
 
-# CUDA 12.1 버전 (대부분의 환경에 적합)
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# 또는 CUDA 11.8 (구형 GPU/드라이버)
-# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+# CUDA 빌드 설치 (최신 드라이버면 cu128 권장)
+pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
-NVIDIA 드라이버는 NVIDIA 공식 사이트에서 받으세요. CUDA Toolkit은 PyTorch가 자체적으로 사용하므로 별도 설치 불필요합니다.
+> ⚠️ **CUDA 버전은 환경마다 다릅니다.** 위 `cu128`은 비교적 최신 드라이버 기준입니다. 구형 GPU·드라이버이거나 Linux/다른 CUDA 버전이라면, OS·CUDA를 선택해 정확한 명령을 생성해 주는 **[PyTorch 공식 설치 셀렉터](https://pytorch.org/get-started/locally/)** 를 사용하세요. 지원 CUDA 버전은 `nvidia-smi` 우측 상단의 `CUDA Version` 으로 확인합니다.
+>
+> NVIDIA 드라이버는 NVIDIA 공식 사이트에서 받으세요. CUDA Toolkit은 PyTorch가 번들 라이브러리를 쓰므로 별도 설치가 필요 없습니다.
 
 **3단계: `.env`에서 활성화**
 ```env
