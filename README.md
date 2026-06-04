@@ -1,6 +1,6 @@
 # 회의록 자동 기록 시스템 (metting_record)
 
-[![Release](https://img.shields.io/github/v/release/thisgun/metting_record?style=flat)](https://github.com/thisgun/metting_record/releases)
+[![Release](https://img.shields.io/github/v/release/thisgun/meeting_record?style=flat)](https://github.com/thisgun/meeting_record/releases)
 [![License](https://img.shields.io/badge/license-LGPL--2.1-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
 
@@ -15,8 +15,8 @@
 ### 1. Python 파이프라인 (회의 처리)
 
 ```bash
-git clone https://github.com/thisgun/metting_record.git
-cd metting_record
+git clone https://github.com/thisgun/meeting_record.git
+cd meeting_record
 pip install -r requirements.txt
 python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)
 cp .env.example .env                   # 환경 변수 채우기
@@ -26,7 +26,7 @@ python main.py "회의.mp3"               # 회의 처리
 
 ### 2. 그누보드5 PHP 플러그인 (게시판 자동 등록)
 
-[Releases 페이지](https://github.com/thisgun/metting_record/releases/latest)에서 `g5_meeting_api-vX.Y.Z.zip` 다운로드 → 압축 풀어서 안의 `plugin/meeting_api/` 폴더를 그누보드5의 `plugin/` 안에 FTP 업로드. 자세한 절차는 아래 [그누보드5 plugin 표준 배치](#그누보드5-plugin-표준-배치) 섹션.
+[Releases 페이지](https://github.com/thisgun/meeting_record/releases/latest)에서 `g5_meeting_api-vX.Y.Z.zip` 다운로드 → 압축 풀어서 안의 `plugin/meeting_api/` 폴더를 그누보드5의 `plugin/` 안에 FTP 업로드. 자세한 절차는 아래 [그누보드5 plugin 표준 배치](#그누보드5-plugin-표준-배치) 섹션.
 
 ### 3. 웹 UI (선택)
 

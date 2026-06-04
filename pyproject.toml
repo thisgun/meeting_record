@@ -45,10 +45,10 @@ dependencies = [
 korean-nlp = ["kiwipiepy>=0.20.0"]
 
 [project.urls]
-Homepage = "https://github.com/thisgun/metting_record"
-Repository = "https://github.com/thisgun/metting_record"
-Issues = "https://github.com/thisgun/metting_record/issues"
-Changelog = "https://github.com/thisgun/metting_record/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/thisgun/meeting_record"
+Repository = "https://github.com/thisgun/meeting_record"
+Issues = "https://github.com/thisgun/meeting_record/issues"
+Changelog = "https://github.com/thisgun/meeting_record/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
