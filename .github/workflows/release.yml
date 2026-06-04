@@ -49,7 +49,7 @@ jobs:
       - name: Python 소스 배포본 ZIP 빌드 (참고용)
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          SRC_ZIP="metting_record-${VERSION}-source.zip"
+          SRC_ZIP="meeting_record-${VERSION}-source.zip"
           # 빌드 산출물/모델 제외
           zip -r "dist/${SRC_ZIP}" \
             . \
@@ -77,7 +77,7 @@ jobs:
             echo "**Python 파이프라인** (회의록 처리 본체):"
             echo '```bash'
             echo "git clone https://github.com/${{ github.repository }}.git"
-            echo "cd metting_record"
+            echo "cd meeting_record"
             echo "pip install -r requirements.txt"
             echo "python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)"
             echo "cp .env.example .env                   # 환경 변수 채우기"
@@ -113,6 +113,6 @@ jobs:
           files: |
             dist/g5_meeting_api-${{ steps.version.outputs.version }}.zip
             dist/g5_meeting_api-${{ steps.version.outputs.version }}.zip.sha256
-            dist/metting_record-${{ steps.version.outputs.version }}-source.zip
+            dist/meeting_record-${{ steps.version.outputs.version }}-source.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

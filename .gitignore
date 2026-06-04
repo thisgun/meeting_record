@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.venv-meetingrec/
 .pytest_cache/
 
 # 데이터 (모두 대용량 또는 개인정보 포함 가능) — 전부 무시

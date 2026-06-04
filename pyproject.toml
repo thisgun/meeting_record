@@ -1,5 +1,5 @@
 [project]
-name = "metting-record"
+name = "meeting-record"
 version = "0.1.0"
 description = "한국어 회의 음성을 자동으로 화자별 분리·요약하여 SQLite와 그누보드5 게시판에 등록"
 readme = "README.md"

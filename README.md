@@ -1,4 +1,4 @@
-# 회의록 자동 기록 시스템 (metting_record)
+# 회의록 자동 기록 시스템 (meeting_record)
 
 [![Release](https://img.shields.io/github/v/release/thisgun/meeting_record?style=flat)](https://github.com/thisgun/meeting_record/releases)
 [![License](https://img.shields.io/badge/license-LGPL--2.1-blue.svg)](LICENSE)
@@ -8,21 +8,28 @@
 
 **모든 처리는 로컬 PC에서 일어납니다** — 음성/텍스트가 외부 클라우드로 나가지 않고, 비용도 0원.
 
-> **⚠️ 안내:** 프로젝트명/디렉토리명/저장소명에 사용된 `metting`은 `meeting`의 오타입니다. 이미 그누보드5 게시판 `bo_table=meeting`, PHP 폴더 `plugin/meeting_api/`, 환경변수 `MEETING_*` 등에 광범위하게 사용되고 있어 호환성 유지를 위해 그대로 둡니다. 새로 시작하시면 `meeting`으로 변경하셔도 좋습니다.
+> **⚠️ 안내:** 초기 버전에서 `meeting`을 `metting`으로 잘못 표기했으나, 저장소명·게시판 `bo_table=meeting`·PHP 폴더 `plugin/meeting_api/`·환경변수 `MEETING_*` 등 전반을 `meeting`으로 정정했습니다. 기존 `metting` 설치본을 쓰시는 경우 마이그레이션 절차는 [CHANGELOG](CHANGELOG.md)를 참고하세요.
 
 ## 빠른 시작
 
 ### 1. Python 파이프라인 (회의 처리)
 
-```bash
+```powershell
 git clone https://github.com/thisgun/meeting_record.git
 cd meeting_record
+
+# 전용 가상환경 생성·활성화 (권장 — 전역 파이썬 오염/버전 충돌 방지)
+python -m venv .venv-meetingrec
+.\.venv-meetingrec\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)
 cp .env.example .env                   # 환경 변수 채우기
 python doctor.py                       # 시스템 진단
 python main.py "회의.mp3"               # 회의 처리
 ```
+
+> **💡 가상환경을 꼭 쓰세요.** 이 프로젝트는 `torch`·`whisperx`·`pyannote.audio` 등 무거운 패키지를 최신 버전으로 끌어옵니다. 전역 파이썬에 바로 설치하면 `open-webui` 처럼 버전을 고정해 쓰는 다른 앱과 충돌(`numpy`, `faster-whisper` 등)이 납니다. 전용 venv로 격리하면 안전합니다. 이후 작업할 때마다 먼저 `.\.venv-meetingrec\Scripts\Activate.ps1` 로 활성화하세요.
 
 ### 2. 그누보드5 PHP 플러그인 (게시판 자동 등록)
 
@@ -313,9 +320,16 @@ pydub             # 오디오 메타데이터
 
 설치 명령:
 ```powershell
-cd c:\dev2\metting_record
+cd c:\dev2\meeting_record
+
+# 전용 가상환경 생성·활성화 (최초 1회)
+python -m venv .venv-meetingrec
+.\.venv-meetingrec\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 ```
+
+> 활성화된 venv 안에서는 프롬프트 앞에 `(.venv-meetingrec)` 가 표시됩니다. 새 터미널을 열 때마다 `.\.venv-meetingrec\Scripts\Activate.ps1` 로 다시 활성화하세요. (PowerShell 실행정책 오류가 나면 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` 1회 실행)
 
 ### AI 모델 (사전 다운로드, ~6GB)
 
@@ -604,7 +618,7 @@ schtasks /create /tn "MettingBackup" /sc DAILY /st 03:00 `
 
 백업 내용:
 - `meetings.db` (SQLite, sqlite3.backup() API로 안전한 복사)
-- `metting.sql` (MariaDB mysqldump, 트리거/이벤트/루틴 포함)
+- `meeting.sql` (MariaDB mysqldump, 트리거/이벤트/루틴 포함)
 
 ### 회의록 export (Word / HTML)
 
@@ -739,13 +753,13 @@ python dict.py add 갈매기특공대 --pattern "갈매기 특공대"
 
 ### 그누보드5 plugin 표준 배치
 
-회의록 등록 PHP API는 **그누보드5의 표준 `plugin/` 디렉토리** 안에 `metting_api/` 폴더로 설치합니다. 그누보드5 원본 코드는 한 줄도 수정하지 않고 새 폴더만 추가하는 방식.
+회의록 등록 PHP API는 **그누보드5의 표준 `plugin/` 디렉토리** 안에 `meeting_api/` 폴더로 설치합니다. 그누보드5 원본 코드는 한 줄도 수정하지 않고 새 폴더만 추가하는 방식.
 
 **디렉토리 구조**:
 ```
 gnuboard5/                         ← 원본 (수정 안 함)
 └── plugin/
-    └── metting_api/               ← 추가하는 폴더
+    └── meeting_api/               ← 추가하는 폴더
         ├── _bootstrap.php
         ├── _load_gnuboard5.php
         ├── config.php             ← G5 경로 자동 (../../로 그누보드5 루트)
@@ -774,7 +788,7 @@ python doctor.py
    /home/<user>/www/
    └── gnu5615/
        └── plugin/
-           └── metting_api/        ← 업로드
+           └── meeting_api/        ← 업로드
    ```
 
 2. **운영 토큰 설정** — `config.local.php.example` → `config.local.php` 복사 후 토큰/디버그 변경:
@@ -1047,7 +1061,7 @@ python scripts\download_models.py
 
 ### 문제 6: "그누보드5 게시판에 글이 안 보여요"
 
-**원인 A**: `metting` 게시판이 만들어지지 않음.
+**원인 A**: `meeting` 게시판이 만들어지지 않음.
 
 **해결**: API 헬스 체크로 확인
 ```powershell
@@ -1066,7 +1080,7 @@ CREATE TABLE g5_write_meeting LIKE g5_write_free;
 
 **원인 B**: 비회원 글 작성이 막혀있음.
 
-**해결**: 그누보드5 관리자(`http://127.0.0.1/gnuboard5/adm/`)에서 metting 게시판의 글쓰기 권한을 "모두"로 변경.
+**해결**: 그누보드5 관리자(`http://127.0.0.1/gnuboard5/adm/`)에서 meeting 게시판의 글쓰기 권한을 "모두"로 변경.
 
 ### 문제 7: "회의가 너무 길어서 요약이 잘려요"
 
@@ -1108,12 +1122,12 @@ CREATE TABLE g5_write_meeting LIKE g5_write_free;
 |------|------|------|
 | 로컬 DB | `c:\dev2\metting_record\data\meetings.db` | 매주 |
 | 원본 음성 | `c:\dev2\metting_record\data\uploads\` | 매월 |
-| 그누보드5 DB | `metting` (MariaDB) | 매주 |
-| 그누보드5 첨부파일 | `c:\dev2\gnuboard5\data\file\metting\` | 매월 |
+| 그누보드5 DB | `meeting` (MariaDB) | 매주 |
+| 그누보드5 첨부파일 | `c:\dev2\gnuboard5\data\file\meeting\` | 매월 |
 
 MariaDB 백업:
 ```powershell
-& "C:\xampp\mysql\bin\mysqldump.exe" -u root metting > backup.sql
+& "C:\xampp\mysql\bin\mysqldump.exe" -u root meeting > backup.sql
 ```
 
 ### 디스크 공간
