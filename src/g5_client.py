@@ -52,6 +52,21 @@ def build_clients_from_env(cfg) -> list["G5MettingApiClient"]:
     return clients
 
 
+def legacy_default_target_name(clients: list["G5MettingApiClient"]) -> str | None:
+    """기존 단일 설정(default) 동기화 행을 어느 named target으로 볼지 결정한다."""
+    import os
+
+    names = {c.name for c in clients}
+    explicit = (os.getenv("G5_LEGACY_TARGET") or "").strip().lower()
+    if explicit:
+        return explicit if explicit in names and explicit != "default" else None
+    if len(clients) == 1 and clients[0].name != "default":
+        return clients[0].name
+    if "remote" in names:
+        return "remote"
+    return None
+
+
 class G5ApiError(RuntimeError):
     pass
 
@@ -61,7 +76,13 @@ class G5ClientBase(ABC):
     def health(self) -> dict: ...
 
     @abstractmethod
-    def create_post(self, subject: str, content: str, bo_table: Optional[str] = None) -> dict: ...
+    def create_post(
+        self,
+        subject: str,
+        content: str,
+        bo_table: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> dict: ...
 
     @abstractmethod
     def create_comment(
@@ -70,6 +91,7 @@ class G5ClientBase(ABC):
         content: str,
         bo_table: Optional[str] = None,
         author_name: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> dict: ...
 
     @abstractmethod
@@ -162,12 +184,20 @@ class G5MettingApiClient(G5ClientBase):
     def health(self) -> dict:
         return self._get("health.php")
 
-    def create_post(self, subject: str, content: str, bo_table: Optional[str] = None) -> dict:
+    def create_post(
+        self,
+        subject: str,
+        content: str,
+        bo_table: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> dict:
         payload = {
             "subject": subject,
             "content": content,
             "bo_table": bo_table or self.bo_table,
         }
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         return self._post("post.php", payload, max_retries=0)
 
     def create_comment(
@@ -176,6 +206,7 @@ class G5MettingApiClient(G5ClientBase):
         content: str,
         bo_table: Optional[str] = None,
         author_name: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> dict:
         payload = {
             "wr_id": int(wr_id),
@@ -184,6 +215,8 @@ class G5MettingApiClient(G5ClientBase):
         }
         if author_name:
             payload["author_name"] = author_name
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         return self._post("comment.php", payload, max_retries=0)
 
     def update_post(
@@ -263,17 +296,28 @@ if __name__ == "__main__":
     if cmd == "health":
         print(json.dumps(client.health(), ensure_ascii=False, indent=2))
     elif cmd == "test":
-        post = client.create_post(
-            "API 클라이언트 테스트",
-            "## 개요\n메인 파이프라인 통합 전 테스트입니다.",
-        )
-        print("POST:", post)
-        wr_id = post["wr_id"]
-        for s in [
-            {"speaker": "사용자1", "start": 0.0, "end": 1.0, "text": "안녕하세요"},
-            {"speaker": "사용자2", "start": 1.5, "end": 3.0, "text": "반갑습니다"},
-        ]:
-            c = client.create_comment(wr_id, format_utterance_comment(s))
-            print("COMMENT:", c)
+        wr_id = None
+        try:
+            post = client.create_post(
+                "API 클라이언트 테스트",
+                "## 개요\n메인 파이프라인 통합 전 테스트입니다.",
+                idempotency_key="meeting_record:g5_client_test:post",
+            )
+            print("POST:", post)
+            wr_id = int(post["wr_id"])
+            for idx, s in enumerate([
+                {"speaker": "사용자1", "start": 0.0, "end": 1.0, "text": "안녕하세요"},
+                {"speaker": "사용자2", "start": 1.5, "end": 3.0, "text": "반갑습니다"},
+            ], start=1):
+                c = client.create_comment(
+                    wr_id,
+                    format_utterance_comment(s),
+                    idempotency_key=f"meeting_record:g5_client_test:comment:{idx}",
+                )
+                print("COMMENT:", c)
+        finally:
+            if wr_id:
+                deleted = client.delete_post(wr_id)
+                print("DELETE:", deleted)
     else:
         print(f"unknown cmd: {cmd}. usage: python -m src.g5_client [health|test]")

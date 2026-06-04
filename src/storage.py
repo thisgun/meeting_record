@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 import re
+import uuid as uuidlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meetings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT,
     created_at TEXT NOT NULL,
     source_file TEXT NOT NULL,
     title TEXT NOT NULL,
@@ -29,6 +31,7 @@ CREATE TABLE IF NOT EXISTS meetings (
 
 CREATE TABLE IF NOT EXISTS utterances (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT,
     meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
     seq INTEGER NOT NULL,
     speaker TEXT NOT NULL,
@@ -130,9 +133,34 @@ def connect(db_path: str | Path):
         conn.close()
 
 
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+
+
+def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:
+    if column_name not in _table_columns(conn, table_name):
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+
+def _backfill_uuid_column(conn: sqlite3.Connection, table_name: str) -> None:
+    for row in conn.execute(
+        f"SELECT id FROM {table_name} WHERE uuid IS NULL OR uuid = ''"
+    ).fetchall():
+        conn.execute(
+            f"UPDATE {table_name} SET uuid = ? WHERE id = ?",
+            (str(uuidlib.uuid4()), int(row["id"])),
+        )
+
+
 def init_db(db_path: str | Path) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        _ensure_column(conn, "meetings", "uuid", "TEXT")
+        _ensure_column(conn, "utterances", "uuid", "TEXT")
+        _backfill_uuid_column(conn, "meetings")
+        _backfill_uuid_column(conn, "utterances")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_uuid ON meetings(uuid)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_utterances_uuid ON utterances(uuid)")
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         conn.execute(
             """INSERT OR IGNORE INTO meeting_sync_targets
@@ -164,22 +192,24 @@ def save_meeting(
     """회의 + 발화 저장. meeting_id 반환."""
     init_db(db_path)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    meeting_uuid = str(uuidlib.uuid4())
     speakers = sorted({u["speaker"] for u in utterances})
 
     with connect(db_path) as conn:
         cur = conn.execute(
             """INSERT INTO meetings
-                 (created_at, source_file, title, summary_md, duration_sec, speaker_count)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (now, str(source_file), title, summary_md, float(duration_sec), len(speakers)),
+                 (uuid, created_at, source_file, title, summary_md, duration_sec, speaker_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (meeting_uuid, now, str(source_file), title, summary_md, float(duration_sec), len(speakers)),
         )
         meeting_id = cur.lastrowid
         conn.executemany(
             """INSERT INTO utterances
-                 (meeting_id, seq, speaker, start_sec, end_sec, text)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+                 (uuid, meeting_id, seq, speaker, start_sec, end_sec, text)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
+                    str(uuidlib.uuid4()),
                     meeting_id, i,
                     u["speaker"],
                     float(u["start"]), float(u["end"]),
@@ -361,6 +391,54 @@ def _upsert_utterance_target(
     )
 
 
+def _refresh_meeting_target_from_utterances(
+    conn: sqlite3.Connection,
+    meeting_id: int,
+    target_name: str,
+) -> None:
+    target = conn.execute(
+        "SELECT * FROM meeting_sync_targets WHERE meeting_id = ? AND target_name = ?",
+        (int(meeting_id), target_name),
+    ).fetchone()
+    if not target or not target["remote_post_id"]:
+        return
+
+    rows = [dict(r) for r in conn.execute(
+        """SELECT u.seq, ust.remote_comment_id, ust.sync_status, ust.sync_error
+             FROM utterances u
+        LEFT JOIN utterance_sync_targets ust
+               ON ust.utterance_id = u.id AND ust.target_name = ?
+            WHERE u.meeting_id = ?
+            ORDER BY u.seq""",
+        (target_name, int(meeting_id)),
+    ).fetchall()]
+    incomplete = [
+        r for r in rows
+        if not r.get("remote_comment_id") or r.get("sync_status") != "synced"
+    ]
+    errors = [
+        f"seq={r['seq']}: {r['sync_error']}"
+        for r in rows
+        if r.get("sync_error")
+    ]
+    status = "partial" if incomplete else "synced"
+    if incomplete and not errors:
+        errors.append(f"{len(incomplete)} comments pending")
+
+    conn.execute(
+        """UPDATE meeting_sync_targets
+              SET sync_status = ?, sync_error = ?, updated_at = ?
+            WHERE meeting_id = ? AND target_name = ?""",
+        (
+            status,
+            "; ".join(errors)[:2000] if errors else None,
+            _utc_now(),
+            int(meeting_id),
+            target_name,
+        ),
+    )
+
+
 def list_unsynced(db_path: str | Path, target_names: list[str] | None = None) -> list[dict]:
     """remote 업로드 실패/대기 중인 회의."""
     with connect(db_path) as conn:
@@ -378,9 +456,6 @@ def list_unsynced(db_path: str | Path, target_names: list[str] | None = None) ->
                     (row["id"],),
                 ).fetchall()
             }
-            if row["sync_status"] in ("pending", "partial", "failed"):
-                out.append(row)
-                continue
             if any(target_rows.get(name, {}).get("sync_status") != "synced" for name in wanted):
                 out.append(row)
         return out
@@ -448,6 +523,24 @@ def mark_meeting_synced(
         _rollup_meeting(conn, meeting_id, primary_post_id=str(remote_post_id) if primary else None)
 
 
+def mark_meeting_post_updated(
+    db_path: str | Path,
+    meeting_id: int,
+    remote_post_id: str,
+    *,
+    target_name: str = "default",
+    primary: bool = True,
+) -> None:
+    """게시글 본문/제목 업데이트 성공. 댓글 상태를 반영해 타겟 상태를 재계산한다."""
+    with connect(db_path) as conn:
+        _upsert_meeting_target(
+            conn, meeting_id, target_name,
+            remote_post_id=remote_post_id, sync_status="synced", sync_error=None,
+        )
+        _refresh_meeting_target_from_utterances(conn, meeting_id, target_name)
+        _rollup_meeting(conn, meeting_id, primary_post_id=str(remote_post_id) if primary else None)
+
+
 def mark_meeting_partial(
     db_path: str | Path,
     meeting_id: int,
@@ -501,6 +594,14 @@ def mark_utterance_synced(
             remote_comment_id=remote_comment_id, sync_status="synced", sync_error=None,
         )
         _rollup_utterance(conn, utterance_id, primary_comment_id=str(remote_comment_id) if primary else None)
+        parent = conn.execute(
+            "SELECT meeting_id FROM utterances WHERE id = ?",
+            (int(utterance_id),),
+        ).fetchone()
+        if parent:
+            meeting_id = int(parent["meeting_id"])
+            _refresh_meeting_target_from_utterances(conn, meeting_id, target_name)
+            _rollup_meeting(conn, meeting_id)
 
 
 def mark_utterance_failed(
@@ -516,6 +617,113 @@ def mark_utterance_failed(
             remote_comment_id=None, sync_status="failed", sync_error=error,
         )
         _rollup_utterance(conn, utterance_id)
+        parent = conn.execute(
+            "SELECT meeting_id FROM utterances WHERE id = ?",
+            (int(utterance_id),),
+        ).fetchone()
+        if parent:
+            meeting_id = int(parent["meeting_id"])
+            _refresh_meeting_target_from_utterances(conn, meeting_id, target_name)
+            _rollup_meeting(conn, meeting_id)
+
+
+def adopt_default_sync_target(db_path: str | Path, target_name: str) -> tuple[int, int]:
+    """기존 단일 타겟(default) 동기화 정보를 새 단일 타겟명으로 복사한다."""
+    target_name = (target_name or "").strip()
+    if not target_name or target_name == "default":
+        return (0, 0)
+    init_db(db_path)
+    with connect(db_path) as conn:
+        now = _utc_now()
+        meeting_insert = conn.execute(
+            """INSERT OR IGNORE INTO meeting_sync_targets
+                 (meeting_id, target_name, remote_post_id, sync_status, sync_error, updated_at)
+               SELECT meeting_id, ?, remote_post_id, sync_status, sync_error, ?
+                 FROM meeting_sync_targets
+                WHERE target_name = 'default'
+                  AND remote_post_id IS NOT NULL
+                  AND remote_post_id <> ''""",
+            (target_name, now),
+        )
+        meeting_update = conn.execute(
+            """UPDATE meeting_sync_targets
+                  SET remote_post_id = (
+                          SELECT src.remote_post_id
+                            FROM meeting_sync_targets src
+                           WHERE src.meeting_id = meeting_sync_targets.meeting_id
+                             AND src.target_name = 'default'
+                      ),
+                      sync_status = (
+                          SELECT src.sync_status
+                            FROM meeting_sync_targets src
+                           WHERE src.meeting_id = meeting_sync_targets.meeting_id
+                             AND src.target_name = 'default'
+                      ),
+                      sync_error = (
+                          SELECT src.sync_error
+                            FROM meeting_sync_targets src
+                           WHERE src.meeting_id = meeting_sync_targets.meeting_id
+                             AND src.target_name = 'default'
+                      ),
+                      updated_at = ?
+                WHERE target_name = ?
+                  AND (remote_post_id IS NULL OR remote_post_id = '')
+                  AND EXISTS (
+                      SELECT 1
+                        FROM meeting_sync_targets src
+                       WHERE src.meeting_id = meeting_sync_targets.meeting_id
+                         AND src.target_name = 'default'
+                         AND src.remote_post_id IS NOT NULL
+                         AND src.remote_post_id <> ''
+                  )""",
+            (now, target_name),
+        )
+        utterance_insert = conn.execute(
+            """INSERT OR IGNORE INTO utterance_sync_targets
+                 (utterance_id, target_name, remote_comment_id, sync_status, sync_error, updated_at)
+               SELECT utterance_id, ?, remote_comment_id, sync_status, sync_error, ?
+                 FROM utterance_sync_targets
+                WHERE target_name = 'default'
+                  AND remote_comment_id IS NOT NULL
+                  AND remote_comment_id <> ''""",
+            (target_name, now),
+        )
+        utterance_update = conn.execute(
+            """UPDATE utterance_sync_targets
+                  SET remote_comment_id = (
+                          SELECT src.remote_comment_id
+                            FROM utterance_sync_targets src
+                           WHERE src.utterance_id = utterance_sync_targets.utterance_id
+                             AND src.target_name = 'default'
+                      ),
+                      sync_status = (
+                          SELECT src.sync_status
+                            FROM utterance_sync_targets src
+                           WHERE src.utterance_id = utterance_sync_targets.utterance_id
+                             AND src.target_name = 'default'
+                      ),
+                      sync_error = (
+                          SELECT src.sync_error
+                            FROM utterance_sync_targets src
+                           WHERE src.utterance_id = utterance_sync_targets.utterance_id
+                             AND src.target_name = 'default'
+                      ),
+                      updated_at = ?
+                WHERE target_name = ?
+                  AND (remote_comment_id IS NULL OR remote_comment_id = '')
+                  AND EXISTS (
+                      SELECT 1
+                        FROM utterance_sync_targets src
+                       WHERE src.utterance_id = utterance_sync_targets.utterance_id
+                         AND src.target_name = 'default'
+                         AND src.remote_comment_id IS NOT NULL
+                         AND src.remote_comment_id <> ''
+                  )""",
+            (now, target_name),
+        )
+        meetings = max(meeting_insert.rowcount, 0) + max(meeting_update.rowcount, 0)
+        utterances = max(utterance_insert.rowcount, 0) + max(utterance_update.rowcount, 0)
+        return (meetings, utterances)
 
 
 def list_meetings(db_path, *, limit: int = 100) -> list[dict]:

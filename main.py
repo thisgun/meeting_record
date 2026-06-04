@@ -17,7 +17,12 @@ from pathlib import Path
 
 from config import load_config
 from src import audio, cache, dictionary, notifier, pii, storage, summarizer, transcriber
-from src.g5_client import G5ApiError, build_clients_from_env, format_utterance_comment
+from src.g5_client import (
+    G5ApiError,
+    build_clients_from_env,
+    format_utterance_comment,
+    legacy_default_target_name,
+)
 
 
 def _print_step(n: int, total: int, msg: str) -> None:
@@ -31,6 +36,42 @@ def _utterance_for_comment(row: dict) -> dict:
         "end": row["end_sec"],
         "text": row["text"],
     }
+
+
+def _safe_key_part(value: str) -> str:
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+    return "".join(ch if ch in allowed else "_" for ch in str(value or "").lower())
+
+
+def _remote_idempotency_key(
+    kind: str,
+    meeting_uuid: str,
+    target_name: str,
+    *,
+    utterance_uuid: str | None = None,
+) -> str:
+    meeting_ref = _safe_key_part(meeting_uuid)
+    target = _safe_key_part(target_name or "default")
+    if not meeting_ref:
+        raise ValueError("meeting_uuid is required for remote idempotency")
+    if utterance_uuid is None:
+        return f"meeting_record:{kind}:{meeting_ref}:{target}"
+    utterance_ref = _safe_key_part(utterance_uuid)
+    if not utterance_ref:
+        raise ValueError("utterance_uuid is required for comment idempotency")
+    return f"meeting_record:{kind}:{meeting_ref}:{utterance_ref}:{target}"
+
+
+def _adopt_legacy_default_target(cfg, clients) -> None:
+    target_name = legacy_default_target_name(clients)
+    if not target_name:
+        return
+    meetings, comments = storage.adopt_default_sync_target(cfg.db_path, target_name)
+    if meetings or comments:
+        print(
+            f"[info] legacy default 동기화 정보를 '{target_name}' 타겟으로 승계: "
+            f"회의 {meetings}건, 댓글 {comments}건"
+        )
 
 
 def _backfill_comment_targets(
@@ -225,6 +266,7 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     if not clients:
         print("[error] G5 클라이언트 없음 — .env의 G5_API_BASE/G5_API_TOKEN 확인")
         return 3
+    _adopt_legacy_default_target(cfg, clients)
     target_names = ", ".join(c.name for c in clients)
     _print_step(6, total_steps, f"그누보드5 업로드 (타겟: {target_names})")
 
@@ -236,7 +278,12 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     for client in clients:
         print(f"  [{client.name}] {client.api_base}")
         try:
-            post = client.create_post(summary["title"], summary["summary_md"])
+            meeting_uuid = meeting_data["meeting"]["uuid"]
+            post = client.create_post(
+                summary["title"],
+                summary["summary_md"],
+                idempotency_key=_remote_idempotency_key("post", meeting_uuid, client.name),
+            )
             wr_id = int(post["wr_id"])
             print(f"    → 게시글 wr_id={wr_id} ({post.get('url', '')})")
             last_wr_id = wr_id
@@ -256,7 +303,15 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
                 author = f"회의_{utt_row['speaker']}"
                 try:
                     resp = client.create_comment(
-                        wr_id, format_utterance_comment(utt), author_name=author
+                        wr_id,
+                        format_utterance_comment(utt),
+                        author_name=author,
+                        idempotency_key=_remote_idempotency_key(
+                            "comment",
+                            meeting_uuid,
+                            client.name,
+                            utterance_uuid=utt_row["uuid"],
+                        ),
                     )
                     storage.mark_utterance_synced(
                         cfg.db_path,
@@ -343,6 +398,7 @@ def resync_failed() -> int:
     if not clients:
         print("[error] .env의 G5_API_BASE/G5_API_TOKEN 또는 G5_TARGETS 설정 확인", file=sys.stderr)
         return 3
+    _adopt_legacy_default_target(cfg, clients)
 
     unsynced = storage.list_unsynced(cfg.db_path, target_names=[c.name for c in clients])
     print(f"미동기화 회의: {len(unsynced)}건")
@@ -354,6 +410,7 @@ def resync_failed() -> int:
         mid = m["id"]
         print(f"\n[meeting_id={mid}] {m['title']}")
         data = storage.get_meeting(cfg.db_path, mid) or {}
+        meeting_uuid = (data.get("meeting") or {}).get("uuid") or m.get("uuid")
         any_target_failed = False
         primary_set = bool(m.get("remote_post_id"))
         for client in clients:
@@ -366,7 +423,8 @@ def resync_failed() -> int:
             try:
                 if target and target.get("remote_post_id"):
                     wr_id = int(target["remote_post_id"])
-                    print(f"  [{client.name}] 기존 게시글 wr_id={wr_id}에 남은 댓글 재전송")
+                    client.update_post(wr_id, subject=m["title"], content=m["summary_md"])
+                    print(f"  [{client.name}] 기존 게시글 wr_id={wr_id} 갱신 후 남은 댓글 재전송")
                     n_backfilled = _backfill_comment_targets(
                         cfg,
                         client=client,
@@ -378,7 +436,11 @@ def resync_failed() -> int:
                     if n_backfilled:
                         print(f"  [{client.name}] 댓글 ID {n_backfilled}건 백필")
                 else:
-                    post = client.create_post(m["title"], m["summary_md"])
+                    post = client.create_post(
+                        m["title"],
+                        m["summary_md"],
+                        idempotency_key=_remote_idempotency_key("post", meeting_uuid, client.name),
+                    )
                     wr_id = int(post["wr_id"])
                     is_primary = not primary_set
                     storage.mark_meeting_posted(
@@ -400,13 +462,30 @@ def resync_failed() -> int:
                     u = _utterance_for_comment(utt)
                     author = f"회의_{utt['speaker']}"
                     try:
-                        resp = client.create_comment(
-                            wr_id, format_utterance_comment(u), author_name=author
-                        )
+                        if utt_target and utt_target.get("remote_comment_id"):
+                            comment_id = int(utt_target["remote_comment_id"])
+                            client.update_comment(
+                                comment_id,
+                                content=format_utterance_comment(u),
+                                author_name=author,
+                            )
+                        else:
+                            resp = client.create_comment(
+                                wr_id,
+                                format_utterance_comment(u),
+                                author_name=author,
+                                idempotency_key=_remote_idempotency_key(
+                                    "comment",
+                                    meeting_uuid,
+                                    client.name,
+                                    utterance_uuid=utt["uuid"],
+                                ),
+                            )
+                            comment_id = int(resp["comment_id"])
                         storage.mark_utterance_synced(
                             cfg.db_path,
                             utt["id"],
-                            str(resp["comment_id"]),
+                            str(comment_id),
                             target_name=client.name,
                             primary=False,
                         )

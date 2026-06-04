@@ -164,3 +164,17 @@ function meeting_require_api_owned_marker($marker) {
     }
     api_error(403, 'Refusing to modify a post that was not created by meeting_api.');
 }
+
+function meeting_normalize_idempotency_key($value) {
+    $key = trim((string)$value);
+    if ($key === '') {
+        return '';
+    }
+    if (strlen($key) > 190) {
+        api_error(400, 'idempotency_key is too long');
+    }
+    if (!preg_match('/^[A-Za-z0-9._:-]+$/', $key)) {
+        api_error(400, 'idempotency_key may contain only letters, numbers, dot, colon, underscore, and hyphen');
+    }
+    return $key;
+}

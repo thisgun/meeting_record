@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -73,13 +72,18 @@ def main() -> int:
             post = c.create_post(
                 subject="[연결 테스트] 자동 삭제 예정",
                 content="g5_meeting_api 연결 점검용. 곧 자동 삭제됩니다.",
+                idempotency_key=f"meeting_record:check_g5_remote:post:{c.name}",
             )
             wr_id = post["wr_id"]
             print(f"  ✓ 게시글 생성 OK: wr_id={wr_id}")
             print(f"  → 게시판 URL: {post.get('url')}")
             c.update_post(wr_id, subject="[연결 테스트] 수정 확인", content="게시글 수정 API 확인.")
             print(f"  ✓ 게시글 수정 OK")
-            comment = c.create_comment(wr_id, "댓글 생성 API 확인.")
+            comment = c.create_comment(
+                wr_id,
+                "댓글 생성 API 확인.",
+                idempotency_key=f"meeting_record:check_g5_remote:comment:{c.name}",
+            )
             comment_id = comment["comment_id"]
             print(f"  ✓ 댓글 생성 OK: comment_id={comment_id}")
             c.update_comment(comment_id, content="댓글 수정 API 확인.", author_name="회의_점검")

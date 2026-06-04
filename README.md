@@ -856,6 +856,8 @@ G5_API_BASE_LOCAL=http://127.0.0.1/gnuboard5/plugin/meeting_api
 G5_API_TOKEN_LOCAL=로컬_토큰
 G5_API_BASE_REMOTE=https://YOUR-DOMAIN/gnu5615/plugin/meeting_api
 G5_API_TOKEN_REMOTE=원격_토큰
+# 기존 단일 설정(default)이 원격 게시판이었다면 remote로 승계
+G5_LEGACY_TARGET=remote
 ```
 
 회의 처리 시 두 게시판에 동시 등록하며, `python main.py --resync`는 타겟별 누락분을 다시 전송합니다.

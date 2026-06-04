@@ -12,10 +12,11 @@
  *   {
  *     "subject": "회의 제목",
  *     "content": "마크다운 본문",
- *     "bo_table": "meeting"   // 선택, 미지정 시 config의 meeting_BO_TABLE
+ *     "bo_table": "meeting",   // 선택, 미지정 시 config의 meeting_BO_TABLE
+ *     "idempotency_key": "meeting_record:post:1:default" // 선택, 중복 생성 방지
  *   }
  *
- * 응답: { "ok": true, "wr_id": 123, "url": "..." }
+ * 응답: { "ok": true, "wr_id": 123, "url": "...", "idempotent": false }
  *
  * 참고: 그누보드5 common.php가 글로벌 스코프에 $bo_table, $wr_id 등을 정의하므로,
  *      common.php 로드 전에 입력값을 m_ prefix 로컬 변수로 저장한다.
@@ -28,6 +29,7 @@ $m_body = read_json_body();
 $m_subject = trim((string)($m_body['subject'] ?? ''));
 $m_content = (string)($m_body['content'] ?? '');
 $m_bo_table = meeting_normalize_bo_table($m_body['bo_table'] ?? meeting_BO_TABLE);
+$m_idempotency_key = meeting_normalize_idempotency_key($m_body['idempotency_key'] ?? '');
 
 if ($m_subject === '') api_error(400, 'subject is required');
 if ($m_content === '') api_error(400, 'content is required');
@@ -48,9 +50,30 @@ $wr_email = meeting_sql_escape(meeting_WR_EMAIL);
 $wr_homepage = meeting_sql_escape(meeting_WR_HOMEPAGE);
 $mb_id_esc = meeting_sql_escape(meeting_MB_ID);
 $api_marker = meeting_sql_escape(meeting_API_MARKER);
+$idempotency_key = meeting_sql_escape($m_idempotency_key);
 $ip = meeting_sql_escape($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
 $now = G5_TIME_YMDHIS;
 $bo_table_esc = meeting_sql_escape($m_bo_table);
+
+$url_base = G5_BBS_URL . '/board.php?bo_table=' . urlencode($m_bo_table) . '&wr_id=';
+
+if ($m_idempotency_key !== '') {
+    $existing = sql_fetch("SELECT wr_id FROM $write_table_sql
+        WHERE wr_is_comment = 0
+          AND wr_9 = '$idempotency_key'
+          AND wr_10 = '$api_marker'
+        ORDER BY wr_id ASC
+        LIMIT 1");
+    if ($existing && (int)$existing['wr_id'] > 0) {
+        $existing_wr_id = (int)$existing['wr_id'];
+        api_ok([
+            'wr_id' => $existing_wr_id,
+            'bo_table' => $m_bo_table,
+            'url' => $url_base . $existing_wr_id,
+            'idempotent' => true,
+        ]);
+    }
+}
 
 $sql = "INSERT INTO $write_table_sql SET
     wr_num = (SELECT IFNULL(MIN(wr_num) - 1, -1) FROM $write_table_sql AS sq),
@@ -72,7 +95,7 @@ $sql = "INSERT INTO $write_table_sql SET
     wr_last = '$now',
     wr_ip = '$ip',
     wr_1 = '', wr_2 = '', wr_3 = '', wr_4 = '', wr_5 = '',
-    wr_6 = '', wr_7 = '', wr_8 = '', wr_9 = '', wr_10 = '$api_marker'";
+    wr_6 = '', wr_7 = '', wr_8 = '', wr_9 = '$idempotency_key', wr_10 = '$api_marker'";
 
 sql_query($sql);
 $new_wr_id = sql_insert_id();
@@ -90,10 +113,9 @@ sql_query("UPDATE $board_table_sql
     SET bo_count_write = bo_count_write + 1
     WHERE bo_table = '$bo_table_esc'");
 
-$url = G5_BBS_URL . '/board.php?bo_table=' . urlencode($m_bo_table) . '&wr_id=' . $new_wr_id;
-
 api_ok([
     'wr_id' => (int)$new_wr_id,
     'bo_table' => $m_bo_table,
-    'url' => $url,
+    'url' => $url_base . $new_wr_id,
+    'idempotent' => false,
 ]);

@@ -21,7 +21,12 @@ import streamlit as st
 
 from config import load_config
 from src import comparator, dictionary, exporter, stats, storage
-from src.g5_client import G5ApiError, build_clients_from_env, format_utterance_comment
+from src.g5_client import (
+    G5ApiError,
+    build_clients_from_env,
+    format_utterance_comment,
+    legacy_default_target_name,
+)
 
 
 st.set_page_config(page_title="회의록 관리", page_icon="📝", layout="wide")
@@ -83,6 +88,14 @@ def _g5_board_url(api_base: str, bo_table: str, wr_id: str | int) -> str:
     return f"{base}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}"
 
 
+def _g5_clients(cfg):
+    clients = build_clients_from_env(cfg)
+    target_name = legacy_default_target_name(clients)
+    if target_name:
+        storage.adopt_default_sync_target(cfg.db_path, target_name)
+    return clients
+
+
 def _meeting_target_post_id(cfg, meeting_id: int, target_name: str, fallback: str | None = None) -> str | None:
     target = storage.get_meeting_target(cfg.db_path, meeting_id, target_name)
     post_id = target.get("remote_post_id") if target else None
@@ -129,7 +142,7 @@ def _sync_summary_to_g5(cfg, meeting_id: int, title: str, summary_md: str) -> li
     data = storage.get_meeting(cfg.db_path, meeting_id)
     if not data:
         return ["로컬 회의 정보를 찾지 못했습니다."]
-    clients = build_clients_from_env(cfg)
+    clients = _g5_clients(cfg)
     if not clients:
         return ["G5 클라이언트 설정이 없습니다."]
 
@@ -142,18 +155,37 @@ def _sync_summary_to_g5(cfg, meeting_id: int, title: str, summary_md: str) -> li
             data["meeting"].get("remote_post_id"),
         )
         if not post_id:
-            messages.append(f"[{client.name}] 원격 게시글 ID 없음")
+            messages.append(f"[{client.name}] 게시글 갱신 실패: 원격 게시글 ID 없음")
+            storage.mark_meeting_failed(
+                cfg.db_path,
+                meeting_id,
+                "원격 게시글 ID 없음",
+                target_name=client.name,
+            )
             continue
         try:
             client.update_post(int(post_id), subject=title, content=summary_md)
+            storage.mark_meeting_post_updated(
+                cfg.db_path,
+                meeting_id,
+                str(post_id),
+                target_name=client.name,
+                primary=client.name == "default",
+            )
             messages.append(f"[{client.name}] 게시글 갱신 완료")
         except G5ApiError as e:
+            storage.mark_meeting_failed(
+                cfg.db_path,
+                meeting_id,
+                f"게시글 갱신 실패: {e}",
+                target_name=client.name,
+            )
             messages.append(f"[{client.name}] 게시글 갱신 실패: {e}")
     return messages
 
 
 def _sync_utterance_to_g5(cfg, meeting_id: int, utt: dict) -> list[str]:
-    clients = build_clients_from_env(cfg)
+    clients = _g5_clients(cfg)
     if not clients:
         return ["G5 클라이언트 설정이 없습니다."]
 
@@ -168,21 +200,67 @@ def _sync_utterance_to_g5(cfg, meeting_id: int, utt: dict) -> list[str]:
         try:
             comment_id = _comment_target_id(cfg, client, meeting_id, utt)
             if not comment_id:
-                messages.append(f"[{client.name}] 댓글 ID 없음")
+                messages.append(f"[{client.name}] 댓글 갱신 실패: 댓글 ID 없음")
+                storage.mark_utterance_failed(
+                    cfg.db_path,
+                    utt["id"],
+                    "댓글 ID 없음",
+                    target_name=client.name,
+                )
+                post_id = _meeting_target_post_id(cfg, meeting_id, client.name)
+                if post_id:
+                    storage.mark_meeting_partial(
+                        cfg.db_path,
+                        meeting_id,
+                        str(post_id),
+                        "댓글 ID 없음",
+                        target_name=client.name,
+                        primary=False,
+                    )
+                else:
+                    storage.mark_meeting_failed(
+                        cfg.db_path,
+                        meeting_id,
+                        "댓글 ID 없음",
+                        target_name=client.name,
+                    )
                 continue
             client.update_comment(
                 int(comment_id),
                 content=format_utterance_comment(payload),
                 author_name=f"회의_{utt['speaker']}",
             )
+            storage.mark_utterance_synced(
+                cfg.db_path,
+                utt["id"],
+                str(comment_id),
+                target_name=client.name,
+                primary=False,
+            )
             messages.append(f"[{client.name}] 댓글 갱신 완료")
         except G5ApiError as e:
+            storage.mark_utterance_failed(
+                cfg.db_path,
+                utt["id"],
+                f"댓글 갱신 실패: {e}",
+                target_name=client.name,
+            )
+            post_id = _meeting_target_post_id(cfg, meeting_id, client.name)
+            if post_id:
+                storage.mark_meeting_partial(
+                    cfg.db_path,
+                    meeting_id,
+                    str(post_id),
+                    f"댓글 갱신 실패: {e}",
+                    target_name=client.name,
+                    primary=False,
+                )
             messages.append(f"[{client.name}] 댓글 갱신 실패: {e}")
     return messages
 
 
 def _delete_remote_meeting(cfg, meeting_id: int, meeting: dict) -> list[str]:
-    clients = build_clients_from_env(cfg)
+    clients = _g5_clients(cfg)
     if not clients:
         return ["G5 클라이언트 설정이 없어 원격 삭제를 건너뜁니다."]
 
@@ -205,7 +283,7 @@ def _delete_remote_meeting(cfg, meeting_id: int, meeting: dict) -> list[str]:
     return messages
 
 
-def _show_remote_messages(messages: list[str]) -> bool:
+def _render_remote_messages(messages: list[str]) -> bool:
     failed = any("실패" in m for m in messages)
     for msg in messages:
         if "실패" in msg:
@@ -217,7 +295,20 @@ def _show_remote_messages(messages: list[str]) -> bool:
     return not failed
 
 
+def _show_remote_messages(messages: list[str], *, persist: bool = False) -> bool:
+    if persist:
+        st.session_state["_remote_messages"] = list(messages)
+    return _render_remote_messages(messages)
+
+
+def _drain_remote_messages() -> None:
+    messages = st.session_state.pop("_remote_messages", [])
+    if messages:
+        _render_remote_messages(messages)
+
+
 require_app_auth()
+_drain_remote_messages()
 
 
 # ── 사이드바: 페이지 선택 ─────────────────────────────────
@@ -344,7 +435,7 @@ def render_meeting_detail(meeting_id: int):
                 remote_messages: list[str] = []
                 for changed in changed_utts:
                     remote_messages.extend(_sync_utterance_to_g5(cfg, meeting_id, changed))
-                _show_remote_messages(remote_messages)
+                _show_remote_messages(remote_messages, persist=True)
                 st.rerun()
 
         st.divider()
@@ -363,7 +454,10 @@ def render_meeting_detail(meeting_id: int):
                         changed["text"] = new_text
                         storage.update_utterance_text(cfg.db_path, u["id"], new_text)
                         st.success("저장됨")
-                        _show_remote_messages(_sync_utterance_to_g5(cfg, meeting_id, changed))
+                        _show_remote_messages(
+                            _sync_utterance_to_g5(cfg, meeting_id, changed),
+                            persist=True,
+                        )
                         st.rerun()
 
         st.divider()
@@ -374,7 +468,10 @@ def render_meeting_detail(meeting_id: int):
             if st.form_submit_button("요약 저장"):
                 storage.update_meeting_summary(cfg.db_path, meeting_id, title=new_title, summary_md=new_md)
                 st.success("저장됨")
-                _show_remote_messages(_sync_summary_to_g5(cfg, meeting_id, new_title, new_md))
+                _show_remote_messages(
+                    _sync_summary_to_g5(cfg, meeting_id, new_title, new_md),
+                    persist=True,
+                )
                 st.rerun()
 
         st.divider()
@@ -384,7 +481,10 @@ def render_meeting_detail(meeting_id: int):
             confirm = st.text_input(f"확인을 위해 #{meeting_id} 을 입력하세요")
             if st.button("정말 삭제", type="primary"):
                 if confirm == f"#{meeting_id}":
-                    remote_ok = _show_remote_messages(_delete_remote_meeting(cfg, meeting_id, m))
+                    remote_ok = _show_remote_messages(
+                        _delete_remote_meeting(cfg, meeting_id, m),
+                        persist=True,
+                    )
                     if remote_ok:
                         storage.delete_meeting(cfg.db_path, meeting_id)
                         st.success("삭제됨")
@@ -411,7 +511,7 @@ def render_meeting_detail(meeting_id: int):
 
         st.divider()
         st.caption("그누보드5 게시판 링크")
-        clients = {c.name: c for c in build_clients_from_env(cfg)}
+        clients = {c.name: c for c in _g5_clients(cfg)}
         shown = False
         for target in data.get("sync_targets") or []:
             post_id = target.get("remote_post_id")
