@@ -48,6 +48,8 @@ gnuboard5/
 | POST | `setup_board.php` | 게시판 1회 자동 생성 |
 
 모든 API 요청은 헤더 `X-API-Token` 필수.
+`update_*`, `list_comments.php`, `delete_post.php`는 기본적으로 `post.php`가 생성한 marker 있는 게시글만 대상으로 동작합니다.
+기존 marker 없는 글을 임시로 다뤄야 할 때는 `config.local.php`에서 `meeting_API_ALLOW_UNMARKED_WRITES`를 true로 설정한 뒤 작업 후 되돌리세요.
 
 ```bash
 curl -H "X-API-Token: YOUR_TOKEN" \

@@ -26,10 +26,14 @@ require_once __DIR__ . '/_load_gnuboard5.php';
 $board = get_board_or_die($m_bo_table);
 $write_table_sql = meeting_sql_identifier(write_table_of($m_bo_table));
 
-$comment = sql_fetch("SELECT wr_id, wr_parent FROM $write_table_sql WHERE wr_id = '$m_comment_id' AND wr_is_comment = 1");
+$comment = sql_fetch("SELECT c.wr_id, c.wr_parent, p.wr_10 AS parent_marker
+    FROM $write_table_sql c
+    LEFT JOIN $write_table_sql p ON p.wr_id = c.wr_parent
+    WHERE c.wr_id = '$m_comment_id' AND c.wr_is_comment = 1");
 if (!$comment) {
     api_error(404, "Comment not found: comment_id=$m_comment_id");
 }
+meeting_require_api_owned_marker($comment['parent_marker'] ?? '');
 
 $sets = [];
 if ($has_content) {

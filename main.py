@@ -3,7 +3,7 @@
 사용법:
     python main.py <audio_file>                # 전체 파이프라인 + 업로드
     python main.py <audio_file> --no-upload    # 로컬 저장만
-    python main.py --resync                    # 업로드 실패분 재전송 (8단계 구현 예정)
+    python main.py --resync                    # 업로드 실패분/멀티 타겟 누락분 재전송
     python main.py --show <meeting_id>         # DB에서 회의 조회
 """
 from __future__ import annotations
@@ -17,11 +17,56 @@ from pathlib import Path
 
 from config import load_config
 from src import audio, cache, dictionary, notifier, pii, storage, summarizer, transcriber
-from src.g5_client import G5ApiError, G5MettingApiClient, build_clients_from_env, format_utterance_comment
+from src.g5_client import G5ApiError, build_clients_from_env, format_utterance_comment
 
 
 def _print_step(n: int, total: int, msg: str) -> None:
     print(f"\n[{n}/{total}] {msg}", flush=True)
+
+
+def _utterance_for_comment(row: dict) -> dict:
+    return {
+        "speaker": row["speaker"],
+        "start": row["start_sec"],
+        "end": row["end_sec"],
+        "text": row["text"],
+    }
+
+
+def _backfill_comment_targets(
+    cfg,
+    *,
+    client,
+    meeting_data: dict,
+    wr_id: int,
+    target_name: str,
+    primary: bool,
+) -> int:
+    utterances = meeting_data.get("utterances", [])
+    missing = [
+        u for u in utterances
+        if not (storage.get_utterance_target(cfg.db_path, u["id"], target_name) or {}).get("remote_comment_id")
+    ]
+    if not missing:
+        return 0
+
+    comments = client.list_comments(wr_id)
+    if len(comments) != len(utterances):
+        return 0
+
+    n = 0
+    for utt, comment in zip(utterances, comments):
+        if not comment.get("comment_id"):
+            continue
+        storage.mark_utterance_synced(
+            cfg.db_path,
+            utt["id"],
+            str(comment["comment_id"]),
+            target_name=target_name,
+            primary=primary,
+        )
+        n += 1
+    return n
 
 
 def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = None) -> int:
@@ -197,44 +242,68 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
             last_wr_id = wr_id
             last_post_url = post.get("url")
             is_primary = not any_success
-            if is_primary:
-                storage.mark_meeting_posted(cfg.db_path, meeting_id, str(wr_id))
+            storage.mark_meeting_posted(
+                cfg.db_path,
+                meeting_id,
+                str(wr_id),
+                target_name=client.name,
+                primary=is_primary,
+            )
 
             n_fail = 0
             for utt_row in meeting_data.get("utterances", []):
-                utt = {
-                    "speaker": utt_row["speaker"],
-                    "start": utt_row["start_sec"],
-                    "end": utt_row["end_sec"],
-                    "text": utt_row["text"],
-                }
+                utt = _utterance_for_comment(utt_row)
                 author = f"회의_{utt_row['speaker']}"
                 try:
                     resp = client.create_comment(
                         wr_id, format_utterance_comment(utt), author_name=author
                     )
-                    if is_primary:
-                        storage.mark_utterance_synced(
-                            cfg.db_path, utt_row["id"], str(resp["comment_id"])
-                        )
+                    storage.mark_utterance_synced(
+                        cfg.db_path,
+                        utt_row["id"],
+                        str(resp["comment_id"]),
+                        target_name=client.name,
+                        primary=is_primary,
+                    )
                 except G5ApiError as e:
                     n_fail += 1
+                    storage.mark_utterance_failed(
+                        cfg.db_path,
+                        utt_row["id"],
+                        str(e),
+                        target_name=client.name,
+                    )
                     if n_fail <= 3:
                         print(f"    [warn] 댓글 실패 (seq={utt_row['seq']}): {e}")
             print(f"    → 댓글 {len(meeting_data.get('utterances', []))}건 시도 (실패 {n_fail}건)")
             if n_fail:
                 partial_failure = True
-            if is_primary:
-                if n_fail == 0:
-                    storage.mark_meeting_synced(cfg.db_path, meeting_id, str(wr_id))
-                else:
-                    storage.mark_meeting_partial(
-                        cfg.db_path, meeting_id, str(wr_id),
-                        f"{n_fail} comments failed; run python main.py --resync",
-                    )
+            if n_fail == 0:
+                storage.mark_meeting_synced(
+                    cfg.db_path,
+                    meeting_id,
+                    str(wr_id),
+                    target_name=client.name,
+                    primary=is_primary,
+                )
+            else:
+                storage.mark_meeting_partial(
+                    cfg.db_path,
+                    meeting_id,
+                    str(wr_id),
+                    f"{n_fail} comments failed; run python main.py --resync",
+                    target_name=client.name,
+                    primary=is_primary,
+                )
             any_success = True
         except G5ApiError as e:
             print(f"    [error] '{client.name}' 업로드 실패: {e}")
+            storage.mark_meeting_failed(
+                cfg.db_path,
+                meeting_id,
+                str(e),
+                target_name=client.name,
+            )
 
     if not any_success:
         storage.mark_meeting_failed(cfg.db_path, meeting_id, "all G5 targets failed")
@@ -269,72 +338,120 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
 def resync_failed() -> int:
     cfg = load_config()
     storage.init_db(cfg.db_path)
-    unsynced = storage.list_unsynced(cfg.db_path)
+
+    clients = build_clients_from_env(cfg)
+    if not clients:
+        print("[error] .env의 G5_API_BASE/G5_API_TOKEN 또는 G5_TARGETS 설정 확인", file=sys.stderr)
+        return 3
+
+    unsynced = storage.list_unsynced(cfg.db_path, target_names=[c.name for c in clients])
     print(f"미동기화 회의: {len(unsynced)}건")
     if not unsynced:
         return 0
-
-    if not cfg.g5_api_base or not cfg.g5_api_token:
-        print("[error] .env의 G5_API_BASE/G5_API_TOKEN 확인", file=sys.stderr)
-        return 3
-
-    client = G5MettingApiClient(
-        api_base=cfg.g5_api_base,
-        api_token=cfg.g5_api_token,
-        bo_table=cfg.g5_bo_table,
-    )
 
     fail = 0
     for m in unsynced:
         mid = m["id"]
         print(f"\n[meeting_id={mid}] {m['title']}")
         data = storage.get_meeting(cfg.db_path, mid) or {}
-        wr_id = None
-        try:
-            if m.get("remote_post_id"):
-                wr_id = int(m["remote_post_id"])
-                print(f"  → 기존 게시글 wr_id={wr_id}에 남은 댓글 재전송")
-            else:
-                post = client.create_post(m["title"], m["summary_md"])
-                wr_id = int(post["wr_id"])
-                storage.mark_meeting_posted(cfg.db_path, mid, str(wr_id))
-                print(f"  → 게시글 wr_id={wr_id}")
+        any_target_failed = False
+        primary_set = bool(m.get("remote_post_id"))
+        for client in clients:
+            target = storage.get_meeting_target(cfg.db_path, mid, client.name)
+            if target and target.get("sync_status") == "synced":
+                print(f"  [{client.name}] 이미 동기화됨")
+                continue
 
-            n_fail = 0
-            for utt in data.get("utterances", []):
-                if utt.get("sync_status") == "synced":
-                    continue
-                u = {
-                    "speaker": utt["speaker"],
-                    "start": utt["start_sec"],
-                    "end": utt["end_sec"],
-                    "text": utt["text"],
-                }
-                author = f"회의_{utt['speaker']}"
-                try:
-                    resp = client.create_comment(
-                        wr_id, format_utterance_comment(u), author_name=author
+            wr_id = None
+            try:
+                if target and target.get("remote_post_id"):
+                    wr_id = int(target["remote_post_id"])
+                    print(f"  [{client.name}] 기존 게시글 wr_id={wr_id}에 남은 댓글 재전송")
+                    n_backfilled = _backfill_comment_targets(
+                        cfg,
+                        client=client,
+                        meeting_data=data,
+                        wr_id=wr_id,
+                        target_name=client.name,
+                        primary=False,
                     )
-                    storage.mark_utterance_synced(cfg.db_path, utt["id"], str(resp["comment_id"]))
-                except G5ApiError as e:
-                    n_fail += 1
-                    print(f"  [warn] 댓글 실패 seq={utt['seq']}: {e}")
-            if n_fail == 0:
-                storage.mark_meeting_synced(cfg.db_path, mid, str(wr_id))
-                print("  → 동기화 완료")
-            else:
-                storage.mark_meeting_partial(
-                    cfg.db_path, mid, str(wr_id),
-                    f"{n_fail} comments failed during resync",
+                    if n_backfilled:
+                        print(f"  [{client.name}] 댓글 ID {n_backfilled}건 백필")
+                else:
+                    post = client.create_post(m["title"], m["summary_md"])
+                    wr_id = int(post["wr_id"])
+                    is_primary = not primary_set
+                    storage.mark_meeting_posted(
+                        cfg.db_path,
+                        mid,
+                        str(wr_id),
+                        target_name=client.name,
+                        primary=is_primary,
+                    )
+                    if is_primary:
+                        primary_set = True
+                    print(f"  [{client.name}] 게시글 wr_id={wr_id}")
+
+                n_fail = 0
+                for utt in data.get("utterances", []):
+                    utt_target = storage.get_utterance_target(cfg.db_path, utt["id"], client.name)
+                    if utt_target and utt_target.get("sync_status") == "synced":
+                        continue
+                    u = _utterance_for_comment(utt)
+                    author = f"회의_{utt['speaker']}"
+                    try:
+                        resp = client.create_comment(
+                            wr_id, format_utterance_comment(u), author_name=author
+                        )
+                        storage.mark_utterance_synced(
+                            cfg.db_path,
+                            utt["id"],
+                            str(resp["comment_id"]),
+                            target_name=client.name,
+                            primary=False,
+                        )
+                    except G5ApiError as e:
+                        n_fail += 1
+                        storage.mark_utterance_failed(
+                            cfg.db_path,
+                            utt["id"],
+                            str(e),
+                            target_name=client.name,
+                        )
+                        print(f"  [{client.name}] [warn] 댓글 실패 seq={utt['seq']}: {e}")
+                if n_fail == 0:
+                    storage.mark_meeting_synced(
+                        cfg.db_path,
+                        mid,
+                        str(wr_id),
+                        target_name=client.name,
+                        primary=False,
+                    )
+                    print(f"  [{client.name}] 동기화 완료")
+                else:
+                    storage.mark_meeting_partial(
+                        cfg.db_path,
+                        mid,
+                        str(wr_id),
+                        f"{n_fail} comments failed during resync",
+                        target_name=client.name,
+                        primary=False,
+                    )
+                    any_target_failed = True
+            except G5ApiError as e:
+                storage.mark_meeting_failed(cfg.db_path, mid, str(e), target_name=client.name)
+                print(f"  [{client.name}] [error] 실패: {e}")
+                any_target_failed = True
+            except (TypeError, ValueError) as e:
+                storage.mark_meeting_failed(
+                    cfg.db_path,
+                    mid,
+                    f"invalid remote_post_id: {e}",
+                    target_name=client.name,
                 )
-                fail += 1
-        except G5ApiError as e:
-            storage.mark_meeting_failed(cfg.db_path, mid, str(e))
-            print(f"  [error] 실패: {e}")
-            fail += 1
-        except (TypeError, ValueError) as e:
-            storage.mark_meeting_failed(cfg.db_path, mid, f"invalid remote_post_id: {e}")
-            print(f"  [error] remote_post_id 오류: {e}")
+                print(f"  [{client.name}] [error] remote_post_id 오류: {e}")
+                any_target_failed = True
+        if any_target_failed:
             fail += 1
 
     print(f"\n완료. 실패 {fail}건.")

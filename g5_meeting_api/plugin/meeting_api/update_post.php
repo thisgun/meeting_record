@@ -26,10 +26,11 @@ require_once __DIR__ . '/_load_gnuboard5.php';
 $board = get_board_or_die($m_bo_table);
 $write_table_sql = meeting_sql_identifier(write_table_of($m_bo_table));
 
-$post = sql_fetch("SELECT wr_id FROM $write_table_sql WHERE wr_id = '$m_wr_id' AND wr_is_comment = 0");
+$post = sql_fetch("SELECT wr_id, wr_10 FROM $write_table_sql WHERE wr_id = '$m_wr_id' AND wr_is_comment = 0");
 if (!$post) {
     api_error(404, "Post not found: wr_id=$m_wr_id");
 }
+meeting_require_api_owned_marker($post['wr_10'] ?? '');
 
 $sets = [];
 if ($has_subject) {

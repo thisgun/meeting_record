@@ -72,21 +72,32 @@ def main(meeting_id: int) -> int:
 
     # 그누보드5도 업데이트
     remote_post_id = meeting["meeting"]["remote_post_id"]
-    if remote_post_id:
-        wr_id = int(remote_post_id)
+    if remote_post_id or meeting.get("sync_targets"):
         clients = build_clients_from_env(cfg)
         if not clients:
             print("그누보드5 클라이언트 없음")
             return 2
+        failed = False
         try:
-            clients[0].update_post(
-                wr_id,
-                subject=fixed["title"],
-                content=fixed["summary_md"],
-            )
-            print(f"✓ 그누보드5 wr_id={wr_id} 업데이트 완료")
+            for client in clients:
+                target = storage.get_meeting_target(cfg.db_path, meeting_id, client.name)
+                target_wr_id = target.get("remote_post_id") if target else None
+                if not target_wr_id and client.name == "default":
+                    target_wr_id = remote_post_id
+                if not target_wr_id:
+                    print(f"[warn] [{client.name}] 원격 게시글 ID 없음 — 스킵")
+                    continue
+                wr_id = int(target_wr_id)
+                client.update_post(
+                    wr_id,
+                    subject=fixed["title"],
+                    content=fixed["summary_md"],
+                )
+                print(f"✓ [{client.name}] 그누보드5 wr_id={wr_id} 업데이트 완료")
         except G5ApiError as e:
+            failed = True
             print(f"그누보드5 업데이트 실패: {e}")
+        if failed:
             return 2
 
     return 0

@@ -22,3 +22,7 @@ define('meeting_API_DEBUG', false);
 // 회원으로 작성하려면 mb_id 지정 (운영 환경 권장)
 // define('meeting_MB_ID', 'admin');
 // define('meeting_WR_NAME', '회의록 자동 등록');
+
+// 기존 버전에서 생성된 marker 없는 글을 임시로 수정/삭제해야 할 때만 true.
+// 작업 후 false로 되돌리는 것을 권장.
+// define('meeting_API_ALLOW_UNMARKED_WRITES', true);

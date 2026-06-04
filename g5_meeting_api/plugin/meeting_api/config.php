@@ -32,6 +32,8 @@ if (!defined('meeting_WR_NAME')) define('meeting_WR_NAME', '회의록봇');
 if (!defined('meeting_WR_PASSWORD')) define('meeting_WR_PASSWORD', 'meeting_bot');
 if (!defined('meeting_WR_EMAIL')) define('meeting_WR_EMAIL', '');
 if (!defined('meeting_WR_HOMEPAGE')) define('meeting_WR_HOMEPAGE', '');
+if (!defined('meeting_API_MARKER')) define('meeting_API_MARKER', 'meeting_api');
+if (!defined('meeting_API_ALLOW_UNMARKED_WRITES')) define('meeting_API_ALLOW_UNMARKED_WRITES', false);
 
 // 운영 안전을 위해 디버그는 기본 false. 필요할 때 config.local.php에서 명시적으로 true 지정.
 if (!defined('meeting_API_DEBUG')) define('meeting_API_DEBUG', false);

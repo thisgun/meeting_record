@@ -40,10 +40,15 @@ def cmd_search(args) -> int:
 
     if not args.utterances_only:
         print(f"\n=== 회의 검색 결과 (상위 {args.limit}개) ===\n")
-        meetings = storage.search_meetings(
-            cfg.db_path, args.query,
-            limit=args.limit, since=args.since, until=args.until,
-        )
+        try:
+            meetings = storage.search_meetings(
+                cfg.db_path, args.query,
+                limit=args.limit, since=args.since, until=args.until,
+                advanced=args.advanced,
+            )
+        except Exception as e:
+            print(f"회의 검색 실패: {e}", file=sys.stderr)
+            return 2
         if not meetings:
             print("  (검색 결과 없음)")
         for m in meetings:
@@ -54,11 +59,16 @@ def cmd_search(args) -> int:
 
     if not args.meetings_only:
         print(f"\n=== 발화 검색 결과 (상위 {args.limit}개) ===\n")
-        utts = storage.search_utterances(
-            cfg.db_path, args.query,
-            speaker=args.speaker, meeting_id=args.meeting,
-            limit=args.limit,
-        )
+        try:
+            utts = storage.search_utterances(
+                cfg.db_path, args.query,
+                speaker=args.speaker, meeting_id=args.meeting,
+                limit=args.limit,
+                advanced=args.advanced,
+            )
+        except Exception as e:
+            print(f"발화 검색 실패: {e}", file=sys.stderr)
+            return 2
         if not utts:
             print("  (검색 결과 없음)")
         for u in utts:
@@ -85,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("query", nargs="?", help="검색어 (FTS5 MATCH 문법)")
+    parser.add_argument("query", nargs="?", help="검색어")
     parser.add_argument("--limit", type=int, default=10, help="결과 개수 (기본 10)")
     parser.add_argument("--speaker", help="발화 화자 필터 (예: 사용자3, 회의_사용자3)")
     parser.add_argument("--meeting", type=int, help="특정 meeting_id만 검색")
@@ -94,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--meetings-only", action="store_true", help="회의 요약만 검색")
     parser.add_argument("--utterances-only", action="store_true", help="발화만 검색")
     parser.add_argument("--rebuild", action="store_true", help="FTS 인덱스 재구축")
+    parser.add_argument("--advanced", action="store_true", help="FTS5 MATCH 문법을 그대로 사용")
 
     args = parser.parse_args(argv)
 

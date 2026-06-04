@@ -153,3 +153,14 @@ function write_table_of($bo_table) {
     $bo_table = meeting_normalize_bo_table($bo_table);
     return $g5['write_prefix'] . $bo_table;
 }
+
+function meeting_require_api_owned_marker($marker) {
+    $marker = (string)$marker;
+    if ($marker === (string)meeting_API_MARKER) {
+        return;
+    }
+    if (defined('meeting_API_ALLOW_UNMARKED_WRITES') && meeting_API_ALLOW_UNMARKED_WRITES && $marker === '') {
+        return;
+    }
+    api_error(403, 'Refusing to modify a post that was not created by meeting_api.');
+}

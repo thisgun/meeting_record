@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sqlite3
+import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,31 @@ CREATE TABLE IF NOT EXISTS utterances (
 
 CREATE INDEX IF NOT EXISTS idx_utt_meeting ON utterances(meeting_id, seq);
 CREATE INDEX IF NOT EXISTS idx_meetings_sync ON meetings(sync_status);
+
+CREATE TABLE IF NOT EXISTS meeting_sync_targets (
+    meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    target_name TEXT NOT NULL,
+    remote_post_id TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    sync_error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (meeting_id, target_name)
+);
+
+CREATE TABLE IF NOT EXISTS utterance_sync_targets (
+    utterance_id INTEGER NOT NULL REFERENCES utterances(id) ON DELETE CASCADE,
+    target_name TEXT NOT NULL,
+    remote_comment_id TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    sync_error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (utterance_id, target_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_targets_status
+    ON meeting_sync_targets(target_name, sync_status);
+CREATE INDEX IF NOT EXISTS idx_utterance_targets_status
+    ON utterance_sync_targets(target_name, sync_status);
 
 -- FTS5 전문 검색 인덱스 (한국어 트라이그램 토크나이저)
 CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(
@@ -107,6 +133,23 @@ def connect(db_path: str | Path):
 def init_db(db_path: str | Path) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        conn.execute(
+            """INSERT OR IGNORE INTO meeting_sync_targets
+                 (meeting_id, target_name, remote_post_id, sync_status, sync_error, updated_at)
+               SELECT id, 'default', remote_post_id, sync_status, sync_error, ?
+                 FROM meetings
+                WHERE remote_post_id IS NOT NULL AND remote_post_id <> ''""",
+            (now,),
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO utterance_sync_targets
+                 (utterance_id, target_name, remote_comment_id, sync_status, sync_error, updated_at)
+               SELECT id, 'default', remote_comment_id, sync_status, NULL, ?
+                 FROM utterances
+                WHERE remote_comment_id IS NOT NULL AND remote_comment_id <> ''""",
+            (now,),
+        )
 
 
 def save_meeting(
@@ -159,79 +202,320 @@ def get_meeting(db_path: str | Path, meeting_id: int) -> dict | None:
             "SELECT * FROM utterances WHERE meeting_id = ? ORDER BY seq",
             (meeting_id,),
         ).fetchall()
+        targets = conn.execute(
+            f"""SELECT * FROM meeting_sync_targets
+                  WHERE meeting_id = ?
+                  ORDER BY {_target_order_sql()}""",
+            (meeting_id,),
+        ).fetchall()
+        utt_targets = conn.execute(
+            """SELECT ust.*
+                 FROM utterance_sync_targets ust
+                 JOIN utterances u ON u.id = ust.utterance_id
+                WHERE u.meeting_id = ?
+                ORDER BY u.seq, ust.target_name""",
+            (meeting_id,),
+        ).fetchall()
+        by_utt: dict[int, list[dict]] = {}
+        for target in utt_targets:
+            item = dict(target)
+            by_utt.setdefault(int(item["utterance_id"]), []).append(item)
+
+        utterances = []
+        for u in utts:
+            item = dict(u)
+            item["sync_targets"] = by_utt.get(int(item["id"]), [])
+            utterances.append(item)
         return {
             "meeting": dict(row),
-            "utterances": [dict(u) for u in utts],
+            "sync_targets": [dict(t) for t in targets],
+            "utterances": utterances,
         }
 
 
-def list_unsynced(db_path: str | Path) -> list[dict]:
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _target_order_sql() -> str:
+    return "CASE WHEN target_name = 'default' THEN 0 ELSE 1 END, updated_at, target_name"
+
+
+def _rollup_meeting(conn: sqlite3.Connection, meeting_id: int, *, primary_post_id: str | None = None) -> None:
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM meeting_sync_targets WHERE meeting_id = ?",
+        (int(meeting_id),),
+    ).fetchall()]
+    if not rows:
+        return
+
+    statuses = [r["sync_status"] for r in rows]
+    post_id = primary_post_id or next((r["remote_post_id"] for r in sorted(
+        rows,
+        key=lambda r: (0 if r["target_name"] == "default" else 1, r["updated_at"], r["target_name"]),
+    ) if r.get("remote_post_id")), None)
+    errors = [f"{r['target_name']}: {r['sync_error']}" for r in rows if r.get("sync_error")]
+
+    if all(s == "synced" for s in statuses):
+        status = "synced"
+    elif any(s in ("synced", "partial") for s in statuses) or post_id:
+        status = "partial"
+    elif any(s == "failed" for s in statuses):
+        status = "failed"
+    else:
+        status = "pending"
+
+    conn.execute(
+        """UPDATE meetings
+              SET sync_status = ?, remote_post_id = COALESCE(?, remote_post_id), sync_error = ?
+            WHERE id = ?""",
+        (status, post_id, "; ".join(errors)[:2000] if errors else None, int(meeting_id)),
+    )
+
+
+def _rollup_utterance(conn: sqlite3.Connection, utterance_id: int, *, primary_comment_id: str | None = None) -> None:
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM utterance_sync_targets WHERE utterance_id = ?",
+        (int(utterance_id),),
+    ).fetchall()]
+    if not rows:
+        return
+
+    statuses = [r["sync_status"] for r in rows]
+    comment_id = primary_comment_id or next((r["remote_comment_id"] for r in sorted(
+        rows,
+        key=lambda r: (0 if r["target_name"] == "default" else 1, r["updated_at"], r["target_name"]),
+    ) if r.get("remote_comment_id")), None)
+    if all(s == "synced" for s in statuses):
+        status = "synced"
+    elif any(s == "synced" for s in statuses):
+        status = "partial"
+    elif any(s == "failed" for s in statuses):
+        status = "failed"
+    else:
+        status = "pending"
+
+    conn.execute(
+        """UPDATE utterances
+              SET sync_status = ?, remote_comment_id = COALESCE(?, remote_comment_id)
+            WHERE id = ?""",
+        (status, comment_id, int(utterance_id)),
+    )
+
+
+def _upsert_meeting_target(
+    conn: sqlite3.Connection,
+    meeting_id: int,
+    target_name: str,
+    *,
+    remote_post_id: str | None,
+    sync_status: str,
+    sync_error: str | None = None,
+) -> None:
+    conn.execute(
+        """INSERT INTO meeting_sync_targets
+             (meeting_id, target_name, remote_post_id, sync_status, sync_error, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(meeting_id, target_name) DO UPDATE SET
+             remote_post_id = COALESCE(excluded.remote_post_id, meeting_sync_targets.remote_post_id),
+             sync_status = excluded.sync_status,
+             sync_error = excluded.sync_error,
+             updated_at = excluded.updated_at""",
+        (
+            int(meeting_id),
+            target_name,
+            str(remote_post_id) if remote_post_id is not None else None,
+            sync_status,
+            sync_error[:2000] if sync_error else None,
+            _utc_now(),
+        ),
+    )
+
+
+def _upsert_utterance_target(
+    conn: sqlite3.Connection,
+    utterance_id: int,
+    target_name: str,
+    *,
+    remote_comment_id: str | None,
+    sync_status: str,
+    sync_error: str | None = None,
+) -> None:
+    conn.execute(
+        """INSERT INTO utterance_sync_targets
+             (utterance_id, target_name, remote_comment_id, sync_status, sync_error, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(utterance_id, target_name) DO UPDATE SET
+             remote_comment_id = COALESCE(excluded.remote_comment_id, utterance_sync_targets.remote_comment_id),
+             sync_status = excluded.sync_status,
+             sync_error = excluded.sync_error,
+             updated_at = excluded.updated_at""",
+        (
+            int(utterance_id),
+            target_name,
+            str(remote_comment_id) if remote_comment_id is not None else None,
+            sync_status,
+            sync_error[:2000] if sync_error else None,
+            _utc_now(),
+        ),
+    )
+
+
+def list_unsynced(db_path: str | Path, target_names: list[str] | None = None) -> list[dict]:
     """remote 업로드 실패/대기 중인 회의."""
     with connect(db_path) as conn:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM meetings ORDER BY id").fetchall()]
+        if not target_names:
+            return [r for r in rows if r["sync_status"] in ("pending", "partial", "failed")]
+
+        out: list[dict] = []
+        wanted = [t for t in target_names if t]
+        for row in rows:
+            target_rows = {
+                r["target_name"]: dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM meeting_sync_targets WHERE meeting_id = ?",
+                    (row["id"],),
+                ).fetchall()
+            }
+            if row["sync_status"] in ("pending", "partial", "failed"):
+                out.append(row)
+                continue
+            if any(target_rows.get(name, {}).get("sync_status") != "synced" for name in wanted):
+                out.append(row)
+        return out
+
+
+def list_meeting_targets(db_path: str | Path, meeting_id: int) -> list[dict]:
+    with connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT * FROM meetings WHERE sync_status IN ('pending', 'partial', 'failed') ORDER BY id"
+            f"""SELECT * FROM meeting_sync_targets
+                  WHERE meeting_id = ?
+                  ORDER BY {_target_order_sql()}""",
+            (int(meeting_id),),
         ).fetchall()
         return [dict(r) for r in rows]
 
 
+def get_meeting_target(db_path: str | Path, meeting_id: int, target_name: str) -> dict | None:
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM meeting_sync_targets WHERE meeting_id = ? AND target_name = ?",
+            (int(meeting_id), target_name),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_utterance_target(db_path: str | Path, utterance_id: int, target_name: str) -> dict | None:
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM utterance_sync_targets WHERE utterance_id = ? AND target_name = ?",
+            (int(utterance_id), target_name),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def mark_meeting_posted(
-    db_path: str | Path, meeting_id: int, remote_post_id: str
+    db_path: str | Path,
+    meeting_id: int,
+    remote_post_id: str,
+    *,
+    target_name: str = "default",
+    primary: bool = True,
 ) -> None:
     """게시글 생성은 성공했고 댓글 동기화는 진행 중인 상태로 표시."""
     with connect(db_path) as conn:
-        conn.execute(
-            """UPDATE meetings
-                 SET sync_status = 'partial', remote_post_id = ?, sync_error = NULL
-               WHERE id = ?""",
-            (remote_post_id, meeting_id),
+        _upsert_meeting_target(
+            conn, meeting_id, target_name,
+            remote_post_id=remote_post_id, sync_status="partial", sync_error=None,
         )
+        _rollup_meeting(conn, meeting_id, primary_post_id=str(remote_post_id) if primary else None)
 
 
 def mark_meeting_synced(
-    db_path: str | Path, meeting_id: int, remote_post_id: str
+    db_path: str | Path,
+    meeting_id: int,
+    remote_post_id: str,
+    *,
+    target_name: str = "default",
+    primary: bool = True,
 ) -> None:
     with connect(db_path) as conn:
-        conn.execute(
-            """UPDATE meetings
-                 SET sync_status = 'synced', remote_post_id = ?, sync_error = NULL
-               WHERE id = ?""",
-            (remote_post_id, meeting_id),
+        _upsert_meeting_target(
+            conn, meeting_id, target_name,
+            remote_post_id=remote_post_id, sync_status="synced", sync_error=None,
         )
+        _rollup_meeting(conn, meeting_id, primary_post_id=str(remote_post_id) if primary else None)
 
 
 def mark_meeting_partial(
-    db_path: str | Path, meeting_id: int, remote_post_id: str, error: str
+    db_path: str | Path,
+    meeting_id: int,
+    remote_post_id: str,
+    error: str,
+    *,
+    target_name: str = "default",
+    primary: bool = True,
 ) -> None:
     """게시글은 있으나 일부 댓글 동기화가 남아 있는 상태."""
     with connect(db_path) as conn:
-        conn.execute(
-            """UPDATE meetings
-                 SET sync_status = 'partial', remote_post_id = ?, sync_error = ?
-               WHERE id = ?""",
-            (remote_post_id, error[:2000], meeting_id),
+        _upsert_meeting_target(
+            conn, meeting_id, target_name,
+            remote_post_id=remote_post_id, sync_status="partial", sync_error=error,
         )
+        _rollup_meeting(conn, meeting_id, primary_post_id=str(remote_post_id) if primary else None)
 
 
 def mark_meeting_failed(
-    db_path: str | Path, meeting_id: int, error: str
+    db_path: str | Path,
+    meeting_id: int,
+    error: str,
+    *,
+    target_name: str | None = None,
 ) -> None:
     with connect(db_path) as conn:
-        conn.execute(
-            "UPDATE meetings SET sync_status = 'failed', sync_error = ? WHERE id = ?",
-            (error[:2000], meeting_id),
-        )
+        if target_name:
+            _upsert_meeting_target(
+                conn, meeting_id, target_name,
+                remote_post_id=None, sync_status="failed", sync_error=error,
+            )
+            _rollup_meeting(conn, meeting_id)
+        else:
+            conn.execute(
+                "UPDATE meetings SET sync_status = 'failed', sync_error = ? WHERE id = ?",
+                (error[:2000], int(meeting_id)),
+            )
 
 
 def mark_utterance_synced(
-    db_path: str | Path, utterance_id: int, remote_comment_id: str
+    db_path: str | Path,
+    utterance_id: int,
+    remote_comment_id: str,
+    *,
+    target_name: str = "default",
+    primary: bool = True,
 ) -> None:
     with connect(db_path) as conn:
-        conn.execute(
-            """UPDATE utterances
-                 SET sync_status = 'synced', remote_comment_id = ?
-               WHERE id = ?""",
-            (remote_comment_id, utterance_id),
+        _upsert_utterance_target(
+            conn, utterance_id, target_name,
+            remote_comment_id=remote_comment_id, sync_status="synced", sync_error=None,
         )
+        _rollup_utterance(conn, utterance_id, primary_comment_id=str(remote_comment_id) if primary else None)
+
+
+def mark_utterance_failed(
+    db_path: str | Path,
+    utterance_id: int,
+    error: str,
+    *,
+    target_name: str = "default",
+) -> None:
+    with connect(db_path) as conn:
+        _upsert_utterance_target(
+            conn, utterance_id, target_name,
+            remote_comment_id=None, sync_status="failed", sync_error=error,
+        )
+        _rollup_utterance(conn, utterance_id)
 
 
 def list_meetings(db_path, *, limit: int = 100) -> list[dict]:
@@ -289,6 +573,16 @@ def delete_meeting(db_path, meeting_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def _fts_query(query: str, *, advanced: bool = False) -> str:
+    query = (query or "").strip()
+    if advanced:
+        return query
+    parts = [p for p in re.split(r"\s+", query) if p]
+    if not parts:
+        return '""'
+    return " AND ".join('"' + p.replace('"', '""') + '"' for p in parts)
+
+
 def search_meetings(
     db_path,
     query: str,
@@ -296,6 +590,7 @@ def search_meetings(
     limit: int = 20,
     since: str | None = None,
     until: str | None = None,
+    advanced: bool = False,
 ) -> list[dict]:
     """회의 제목/요약 본문 검색.
 
@@ -310,7 +605,7 @@ def search_meetings(
     JOIN meetings m ON m.id = meetings_fts.rowid
     WHERE meetings_fts MATCH ?
     """
-    params: list = [query]
+    params: list = [_fts_query(query, advanced=advanced)]
     if since:
         sql += " AND m.created_at >= ?"
         params.append(since)
@@ -331,6 +626,7 @@ def search_utterances(
     speaker: str | None = None,
     meeting_id: int | None = None,
     limit: int = 50,
+    advanced: bool = False,
 ) -> list[dict]:
     """발화 검색.
 
@@ -348,7 +644,7 @@ def search_utterances(
     JOIN meetings m ON m.id = u.meeting_id
     WHERE utterances_fts MATCH ?
     """
-    params: list = [query]
+    params: list = [_fts_query(query, advanced=advanced)]
     if speaker:
         sql += " AND u.speaker = ?"
         params.append(speaker)

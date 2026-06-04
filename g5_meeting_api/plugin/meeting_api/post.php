@@ -47,6 +47,7 @@ $wr_password = meeting_WR_PASSWORD ? meeting_sql_escape(sql_password(meeting_WR_
 $wr_email = meeting_sql_escape(meeting_WR_EMAIL);
 $wr_homepage = meeting_sql_escape(meeting_WR_HOMEPAGE);
 $mb_id_esc = meeting_sql_escape(meeting_MB_ID);
+$api_marker = meeting_sql_escape(meeting_API_MARKER);
 $ip = meeting_sql_escape($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
 $now = G5_TIME_YMDHIS;
 $bo_table_esc = meeting_sql_escape($m_bo_table);
@@ -71,7 +72,7 @@ $sql = "INSERT INTO $write_table_sql SET
     wr_last = '$now',
     wr_ip = '$ip',
     wr_1 = '', wr_2 = '', wr_3 = '', wr_4 = '', wr_5 = '',
-    wr_6 = '', wr_7 = '', wr_8 = '', wr_9 = '', wr_10 = ''";
+    wr_6 = '', wr_7 = '', wr_8 = '', wr_9 = '', wr_10 = '$api_marker'";
 
 sql_query($sql);
 $new_wr_id = sql_insert_id();

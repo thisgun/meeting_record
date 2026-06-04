@@ -124,10 +124,11 @@ class G5MettingApiClient(G5ClientBase):
     def __repr__(self):
         return f"G5MettingApiClient(name={self.name!r}, base={self.api_base!r})"
 
-    def _post(self, path: str, payload: dict) -> dict:
+    def _post(self, path: str, payload: dict, *, max_retries: Optional[int] = None) -> dict:
         url = f"{self.api_base}/{path.lstrip('/')}"
         last_err: Optional[Exception] = None
-        for attempt in range(self.max_retries + 1):
+        retries = self.max_retries if max_retries is None else max(0, int(max_retries))
+        for attempt in range(retries + 1):
             try:
                 r = self._session.post(url, json=payload, timeout=self.timeout)
                 try:
@@ -141,7 +142,7 @@ class G5MettingApiClient(G5ClientBase):
                 return data
             except (requests.RequestException, G5ApiError) as e:
                 last_err = e
-                if attempt < self.max_retries:
+                if attempt < retries:
                     time.sleep(self.retry_backoff_sec * (attempt + 1))
                     continue
                 raise G5ApiError(f"Failed after {attempt + 1} attempts: {e}") from e
@@ -167,7 +168,7 @@ class G5MettingApiClient(G5ClientBase):
             "content": content,
             "bo_table": bo_table or self.bo_table,
         }
-        return self._post("post.php", payload)
+        return self._post("post.php", payload, max_retries=0)
 
     def create_comment(
         self,
@@ -183,7 +184,7 @@ class G5MettingApiClient(G5ClientBase):
         }
         if author_name:
             payload["author_name"] = author_name
-        return self._post("comment.php", payload)
+        return self._post("comment.php", payload, max_retries=0)
 
     def update_post(
         self,
@@ -232,7 +233,7 @@ class G5MettingApiClient(G5ClientBase):
             "wr_id": int(wr_id),
             "bo_table": bo_table or self.bo_table,
         }
-        return self._post("delete_post.php", payload)
+        return self._post("delete_post.php", payload, max_retries=0)
 
 
 def format_utterance_comment(utterance: dict) -> str:

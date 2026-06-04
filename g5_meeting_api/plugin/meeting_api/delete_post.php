@@ -22,10 +22,11 @@ $board_new_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_new_table'])
 $board_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_table']);
 $bo_table_esc = meeting_sql_escape($m_bo_table);
 
-$post = sql_fetch("SELECT wr_id FROM $write_table_sql WHERE wr_id = '$m_wr_id' AND wr_is_comment = 0");
+$post = sql_fetch("SELECT wr_id, wr_10 FROM $write_table_sql WHERE wr_id = '$m_wr_id' AND wr_is_comment = 0");
 if (!$post) {
     api_error(404, "Post not found: wr_id=$m_wr_id");
 }
+meeting_require_api_owned_marker($post['wr_10'] ?? '');
 
 $row = sql_fetch("SELECT COUNT(*) AS cnt FROM $write_table_sql WHERE wr_parent = '$m_wr_id' AND wr_is_comment = 1");
 $comment_count = (int)($row['cnt'] ?? 0);

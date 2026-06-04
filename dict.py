@@ -166,63 +166,86 @@ def cmd_apply_to_meeting(args) -> int:
     print("✓ SQLite 갱신")
 
     # 4) 그누보드5도 갱신 (직접 MySQL 대신 HTTP API 사용)
-    if not args.skip_remote and meeting["meeting"]["remote_post_id"]:
-        wr_id = int(meeting["meeting"]["remote_post_id"])
+    if not args.skip_remote and (meeting["meeting"]["remote_post_id"] or meeting.get("sync_targets")):
         clients = build_clients_from_env(cfg)
         if not clients:
             print("[warn] G5 클라이언트 없음 — 원격 갱신 생략", file=sys.stderr)
         else:
-            client = clients[0]
-            print(f"그누보드5 갱신 대상: [{client.name}] {client.api_base}")
             remote_updates = 0
-            try:
-                if title_changed or md_changed:
-                    client.update_post(
-                        wr_id,
-                        subject=new_title if title_changed else None,
-                        content=new_md if md_changed else None,
+            remote_failed = False
+            for client in clients:
+                target = storage.get_meeting_target(cfg.db_path, args.meeting_id, client.name)
+                target_wr_id = target.get("remote_post_id") if target else None
+                if not target_wr_id and client.name == "default":
+                    target_wr_id = meeting["meeting"].get("remote_post_id")
+                if not target_wr_id:
+                    print(f"[warn] [{client.name}] 원격 게시글 ID 없음 — 스킵", file=sys.stderr)
+                    continue
+                wr_id = int(target_wr_id)
+                print(f"그누보드5 갱신 대상: [{client.name}] {client.api_base}")
+                try:
+                    target_updates = 0
+                    comments = []
+                    needs_comment_lookup = any(
+                        orig["text"] != new["text"]
+                        and not (storage.get_utterance_target(cfg.db_path, orig["id"], client.name) or {}).get("remote_comment_id")
+                        for orig, new in zip(utts, new_segs)
                     )
-                    remote_updates += 1
+                    if needs_comment_lookup:
+                        comments = client.list_comments(wr_id)
+                        if len(comments) != len(utts):
+                            print(
+                                f"[warn] [{client.name}] 원격 댓글 수({len(comments)})와 로컬 발화 수({len(utts)})가 달라 순서 매핑이 부정확할 수 있음",
+                                file=sys.stderr,
+                            )
+                            comments = []
 
-                comments = []
-                needs_comment_lookup = any(
-                    orig["text"] != new["text"] and not orig.get("remote_comment_id")
-                    for orig, new in zip(utts, new_segs)
-                )
-                if needs_comment_lookup:
-                    comments = client.list_comments(wr_id)
-                    if len(comments) != len(utts):
-                        print(
-                            f"[warn] 원격 댓글 수({len(comments)})와 로컬 발화 수({len(utts)})가 달라 순서 매핑이 부정확할 수 있음",
-                            file=sys.stderr,
+                    if title_changed or md_changed:
+                        client.update_post(
+                            wr_id,
+                            subject=new_title if title_changed else None,
+                            content=new_md if md_changed else None,
                         )
+                        target_updates += 1
 
-                for idx, (orig, new) in enumerate(zip(utts, new_segs)):
-                    if orig["text"] == new["text"]:
-                        continue
-                    comment_id = orig.get("remote_comment_id")
-                    if not comment_id and idx < len(comments):
-                        comment_id = comments[idx].get("comment_id")
-                        if comment_id:
-                            storage.mark_utterance_synced(cfg.db_path, orig["id"], str(comment_id))
-                    if not comment_id:
-                        print(f"[warn] 발화 id={orig['id']}의 원격 댓글 ID를 찾지 못해 원격 갱신 스킵", file=sys.stderr)
-                        continue
-                    utt_for_comment = {
-                        "speaker": new["speaker"],
-                        "start": new["start"],
-                        "end": new["end"],
-                        "text": new["text"],
-                    }
-                    client.update_comment(
-                        int(comment_id),
-                        content=format_utterance_comment(utt_for_comment),
-                    )
-                    remote_updates += 1
-                print(f"✓ 그누보드5 wr_id={wr_id} 갱신 ({remote_updates}건)")
-            except G5ApiError as e:
-                print(f"[error] 그누보드5 갱신 실패: {e}", file=sys.stderr)
+                    for idx, (orig, new) in enumerate(zip(utts, new_segs)):
+                        if orig["text"] == new["text"]:
+                            continue
+                        utt_target = storage.get_utterance_target(cfg.db_path, orig["id"], client.name)
+                        comment_id = (utt_target or {}).get("remote_comment_id")
+                        if not comment_id and idx < len(comments):
+                            comment_id = comments[idx].get("comment_id")
+                            if comment_id:
+                                storage.mark_utterance_synced(
+                                    cfg.db_path,
+                                    orig["id"],
+                                    str(comment_id),
+                                    target_name=client.name,
+                                    primary=False,
+                                )
+                        if not comment_id:
+                            print(f"[warn] [{client.name}] 발화 id={orig['id']}의 원격 댓글 ID를 찾지 못해 스킵", file=sys.stderr)
+                            continue
+                        utt_for_comment = {
+                            "speaker": new["speaker"],
+                            "start": new["start"],
+                            "end": new["end"],
+                            "text": new["text"],
+                        }
+                        client.update_comment(
+                            int(comment_id),
+                            content=format_utterance_comment(utt_for_comment),
+                        )
+                        target_updates += 1
+                    remote_updates += target_updates
+                    print(f"✓ [{client.name}] wr_id={wr_id} 갱신 ({target_updates}건)")
+                except G5ApiError as e:
+                    remote_failed = True
+                    print(f"[error] [{client.name}] 그누보드5 갱신 실패: {e}", file=sys.stderr)
+            if remote_failed:
                 return 2
+            if remote_updates:
+                print(f"✓ 그누보드5 전체 갱신 ({remote_updates}건)")
 
     # 5) 캐시 파일도 갱신
     src_file = meeting["meeting"]["source_file"]
