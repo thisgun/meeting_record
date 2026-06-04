@@ -1,6 +1,9 @@
 """그누보드5 metting API 클라이언트.
 
 c:\\dev2\\g5_metting_api\\ 의 PHP endpoint에 HTTP로 회의 게시글/댓글을 등록한다.
+
+멀티 타겟 지원 (로컬 + 원격 동시 등록):
+    G5MultiClient([G5MettingApiClient(local), G5MettingApiClient(remote)])
 """
 from __future__ import annotations
 
@@ -9,6 +12,42 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import requests
+
+
+def build_clients_from_env(cfg) -> list["G5MettingApiClient"]:
+    """cfg에서 G5 클라이언트 목록 생성 (단일 또는 멀티 타겟).
+
+    .env 옵션:
+        G5_TARGETS=local,remote     ← 멀티 타겟 활성화 (지정한 prefix들의 설정 사용)
+        G5_API_BASE_LOCAL=http://127.0.0.1/g5_metting_api
+        G5_API_TOKEN_LOCAL=...
+        G5_API_BASE_REMOTE=https://thisgun01.mycafe24.com/g5_metting_api
+        G5_API_TOKEN_REMOTE=...
+
+    G5_TARGETS 가 비어있으면 기존 단일 설정 (G5_API_BASE, G5_API_TOKEN) 사용.
+    """
+    import os
+    targets = (os.getenv("G5_TARGETS") or "").strip()
+    bo_table = cfg.g5_bo_table
+
+    if not targets:
+        # 단일 설정 (기존 방식)
+        return [G5MettingApiClient(
+            api_base=cfg.g5_api_base, api_token=cfg.g5_api_token, bo_table=bo_table,
+            name="default",
+        )]
+
+    clients: list[G5MettingApiClient] = []
+    for name in [t.strip().upper() for t in targets.split(",") if t.strip()]:
+        base = (os.getenv(f"G5_API_BASE_{name}") or "").strip()
+        token = (os.getenv(f"G5_API_TOKEN_{name}") or "").strip()
+        if not base or not token:
+            print(f"[warn] G5 target '{name.lower()}' — G5_API_BASE_{name} 또는 G5_API_TOKEN_{name} 누락, 스킵")
+            continue
+        clients.append(G5MettingApiClient(
+            api_base=base, api_token=token, bo_table=bo_table, name=name.lower(),
+        ))
+    return clients
 
 
 class G5ApiError(RuntimeError):
@@ -44,15 +83,20 @@ class G5MettingApiClient(G5ClientBase):
         timeout: float = 30.0,
         max_retries: int = 2,
         retry_backoff_sec: float = 1.5,
+        name: str = "default",
     ):
         self.api_base = api_base.rstrip("/")
         self.api_token = api_token
         self.bo_table = bo_table
+        self.name = name
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_backoff_sec = retry_backoff_sec
         self._session = requests.Session()
         self._session.headers.update({"X-API-Token": api_token})
+
+    def __repr__(self):
+        return f"G5MettingApiClient(name={self.name!r}, base={self.api_base!r})"
 
     def _post(self, path: str, payload: dict) -> dict:
         url = f"{self.api_base}/{path.lstrip('/')}"

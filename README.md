@@ -697,6 +697,60 @@ python dict.py add 갈매기특공대 --pattern "갈매기 특공대"
 
 > **권장**: 첫 회의 처리 후 STT 결과를 훑어보며 흔한 오류 단어를 등록하세요. 두 번째 회의부터 같은 오류가 자동 교정됩니다.
 
+### 원격 그누보드5 서버에 등록 (cafe24 등)
+
+로컬 XAMPP 외에 cafe24 같은 외부 호스팅의 그누보드5에도 자동 등록 가능.
+
+**배포 패키지 위치**: `c:\dev2\g5_metting_api_dist\` (또는 ZIP: `c:\dev2\g5_metting_api_dist.zip`)
+
+**설치 단계**:
+1. **FTP로 업로드**: ZIP을 풀어 그누보드5 옆 폴더에 업로드
+   ```
+   /home/<user>/www/
+   ├── gnu5615/              ← 기존 그누보드5
+   └── g5_metting_api/       ← 업로드
+   ```
+2. **운영 토큰 설정**: `config.local.php.example` → `config.local.php` 복사 후
+   - `METTING_API_TOKEN` 강력한 랜덤 값으로 변경
+   - `METTING_API_DEBUG = false` 확인
+3. **게시판 자동 생성** (1회만):
+   ```
+   https://YOUR-DOMAIN/g5_metting_api/setup_board.php?token=YOUR_TOKEN
+   ```
+4. **setup_board.php 삭제** (보안)
+5. **헬스체크**:
+   ```
+   https://YOUR-DOMAIN/g5_metting_api/health.php
+   ```
+
+**Python `.env` 설정 — 원격만**:
+```env
+G5_API_BASE=https://YOUR-DOMAIN/g5_metting_api
+G5_API_TOKEN=원격_토큰
+```
+
+**`.env` 설정 — 로컬 + 원격 동시 등록**:
+```env
+G5_TARGETS=local,remote
+G5_API_BASE_LOCAL=http://127.0.0.1/g5_metting_api
+G5_API_TOKEN_LOCAL=로컬_토큰
+G5_API_BASE_REMOTE=https://YOUR-DOMAIN/g5_metting_api
+G5_API_TOKEN_REMOTE=원격_토큰
+```
+각 회의 처리 시 두 게시판에 동시 등록 → 로컬은 검색/분석, 원격은 공유용.
+
+**원격 진단**:
+```powershell
+python scripts/check_g5_remote.py --target remote
+python doctor.py        # G5 타겟 섹션에 모든 클라이언트 health 표시
+```
+
+**보안 주의사항**:
+- `config.local.php` 절대 git에 올리지 말 것
+- 그누보드5 `install/` 폴더는 설치 완료 후 삭제 권장
+- HTTPS 사용 (토큰이 평문 전송됨)
+- 자세한 가이드: `c:\dev2\g5_metting_api_dist\README.md`
+
 ### 화자 등록 (enrollment) — "사용자N" 대신 실제 이름
 
 한 번 사람의 음성을 등록해두면 이후 회의에서 자동으로 실제 이름이 매핑됩니다.

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from config import load_config
 from src import audio, dictionary, notifier, pii, storage, summarizer, transcriber
-from src.g5_client import G5ApiError, G5MettingApiClient, format_utterance_comment
+from src.g5_client import G5ApiError, G5MettingApiClient, build_clients_from_env, format_utterance_comment
 
 
 def _print_step(n: int, total: int, msg: str) -> None:
@@ -167,46 +167,61 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         )
         return 0
 
-    # 6) 그누보드5 업로드
-    _print_step(6, total_steps, f"그누보드5 업로드 ({cfg.g5_api_base})")
-    client = G5MettingApiClient(
-        api_base=cfg.g5_api_base,
-        api_token=cfg.g5_api_token,
-        bo_table=cfg.g5_bo_table,
-    )
-    try:
-        post = client.create_post(summary["title"], summary["summary_md"])
-        wr_id = int(post["wr_id"])
-        print(f"    → 게시글 wr_id={wr_id} ({post.get('url', '')})")
-        storage.mark_meeting_synced(cfg.db_path, meeting_id, str(wr_id))
+    # 6) 그누보드5 업로드 (멀티 타겟 지원: G5_TARGETS=local,remote)
+    clients = build_clients_from_env(cfg)
+    if not clients:
+        print("[error] G5 클라이언트 없음 — .env의 G5_API_BASE/G5_API_TOKEN 확인")
+        return 3
+    target_names = ", ".join(c.name for c in clients)
+    _print_step(6, total_steps, f"그누보드5 업로드 (타겟: {target_names})")
 
-        # 발화 댓글 (각 댓글의 작성자명을 "회의_사용자N" 으로)
-        meeting_data = storage.get_meeting(cfg.db_path, meeting_id) or {}
-        for utt_row in meeting_data.get("utterances", []):
-            utt = {
-                "speaker": utt_row["speaker"],
-                "start": utt_row["start_sec"],
-                "end": utt_row["end_sec"],
-                "text": utt_row["text"],
-            }
-            author = f"회의_{utt_row['speaker']}"
-            try:
-                resp = client.create_comment(
-                    wr_id, format_utterance_comment(utt), author_name=author
-                )
-                storage.mark_utterance_synced(
-                    cfg.db_path, utt_row["id"], str(resp["comment_id"])
-                )
-            except G5ApiError as e:
-                print(f"    [warn] 댓글 실패 (seq={utt_row['seq']}): {e}")
-        print(f"    → 댓글 {len(meeting_data.get('utterances', []))}건 업로드 시도 완료")
-    except G5ApiError as e:
-        storage.mark_meeting_failed(cfg.db_path, meeting_id, str(e))
-        print(f"    [error] 업로드 실패: {e}")
+    meeting_data = storage.get_meeting(cfg.db_path, meeting_id) or {}
+    last_wr_id = None
+    last_post_url = None
+    any_success = False
+    for client in clients:
+        print(f"  [{client.name}] {client.api_base}")
+        try:
+            post = client.create_post(summary["title"], summary["summary_md"])
+            wr_id = int(post["wr_id"])
+            print(f"    → 게시글 wr_id={wr_id} ({post.get('url', '')})")
+            last_wr_id = wr_id
+            last_post_url = post.get("url")
+            if not any_success:
+                storage.mark_meeting_synced(cfg.db_path, meeting_id, str(wr_id))
+
+            n_fail = 0
+            for utt_row in meeting_data.get("utterances", []):
+                utt = {
+                    "speaker": utt_row["speaker"],
+                    "start": utt_row["start_sec"],
+                    "end": utt_row["end_sec"],
+                    "text": utt_row["text"],
+                }
+                author = f"회의_{utt_row['speaker']}"
+                try:
+                    resp = client.create_comment(
+                        wr_id, format_utterance_comment(utt), author_name=author
+                    )
+                    if not any_success:
+                        storage.mark_utterance_synced(
+                            cfg.db_path, utt_row["id"], str(resp["comment_id"])
+                        )
+                except G5ApiError as e:
+                    n_fail += 1
+                    if n_fail <= 3:
+                        print(f"    [warn] 댓글 실패 (seq={utt_row['seq']}): {e}")
+            print(f"    → 댓글 {len(meeting_data.get('utterances', []))}건 시도 (실패 {n_fail}건)")
+            any_success = True
+        except G5ApiError as e:
+            print(f"    [error] '{client.name}' 업로드 실패: {e}")
+
+    if not any_success:
+        storage.mark_meeting_failed(cfg.db_path, meeting_id, "all G5 targets failed")
         print("    → 로컬 DB에는 저장되었습니다. 'python main.py --resync'로 재전송 가능.")
         return 3
 
-    print(f"\n✓ 완료. meeting_id={meeting_id}, 게시글 wr_id={wr_id}")
+    print(f"\n✓ 완료. meeting_id={meeting_id}, 마지막 wr_id={last_wr_id}")
     notifier.notify_meeting_done(
         meeting_id=meeting_id,
         title=summary["title"],
@@ -214,8 +229,8 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         duration_sec=duration,
         speaker_count=len({s["speaker"] for s in segments}),
         utterance_count=len(segments),
-        wr_id=wr_id,
-        g5_url=post.get("url"),
+        wr_id=last_wr_id,
+        g5_url=last_post_url,
         elapsed_sec=time.time() - pipeline_start,
     )
     return 0

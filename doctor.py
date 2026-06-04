@@ -223,6 +223,32 @@ def check_xampp():
         warn("g5_metting_api 접속 실패", "Apache 또는 MariaDB가 중지된 상태일 수 있음")
 
 
+def check_g5_targets():
+    section("G5 타겟 (단일/멀티)")
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from config import load_config
+        from src.g5_client import build_clients_from_env
+        cfg = load_config()
+        clients = build_clients_from_env(cfg)
+        if not clients:
+            warn("G5 클라이언트 없음", ".env의 G5_API_BASE/G5_API_TOKEN 확인")
+            return
+        for c in clients:
+            try:
+                h = c.health()
+                board_ok = h.get("board_exists")
+                ok(f"[{c.name}] {c.api_base}", f"DB={h.get('db_connected')}, board={board_ok}")
+            except Exception as e:
+                msg = str(e)
+                if "Invalid or missing X-API-Token" in msg:
+                    warn(f"[{c.name}] 토큰 불일치", c.api_base)
+                else:
+                    warn(f"[{c.name}] 접속 실패", msg[:120])
+    except Exception as e:
+        warn("타겟 확인 실패", str(e))
+
+
 def check_packages():
     section("Python 핵심 패키지")
     deps = ["whisperx", "faster_whisper", "torch", "torchaudio",
@@ -247,6 +273,7 @@ def main() -> int:
     check_models()
     check_ollama()
     check_xampp()
+    check_g5_targets()
     check_streamlit()
     check_keyword_extractor()
     check_notifier()
