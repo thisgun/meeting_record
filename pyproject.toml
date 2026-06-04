@@ -42,6 +42,17 @@ dependencies = [
     "huggingface-hub>=0.23.0",
 ]
 
+[project.scripts]
+meeting-record = "meeting_record.cli:record"
+meeting-doctor = "meeting_record.cli:doctor"
+meeting-export = "meeting_record.cli:export"
+meeting-search = "meeting_record.cli:search"
+meeting-stats = "meeting_record.cli:stats"
+meeting-compare = "meeting_record.cli:compare"
+meeting-dict = "meeting_record.cli:dictionary"
+meeting-enroll = "meeting_record.cli:enroll"
+meeting-watch = "meeting_record.cli:watch"
+
 [project.optional-dependencies]
 korean-nlp = ["kiwipiepy>=0.20.0"]
 
@@ -55,6 +66,21 @@ Changelog = "https://github.com/thisgun/meeting_record/blob/main/CHANGELOG.md"
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+py-modules = [
+    "app",
+    "compare",
+    "config",
+    "dict",
+    "doctor",
+    "enroll",
+    "export",
+    "main",
+    "search",
+    "stats",
+    "watcher",
+]
+
 [tool.setuptools.packages.find]
-include = ["src*"]
+include = ["src*", "meeting_record*"]
 exclude = ["tests*", "data*", "scripts*"]

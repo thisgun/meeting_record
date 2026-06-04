@@ -245,12 +245,12 @@ def check_xampp():
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from config import load_config
-        from src.g5_client import G5MettingApiClient
+        from src.g5_client import G5MeetingApiClient
         cfg = load_config()
         if not cfg.g5_api_base or not cfg.g5_api_token:
             warn("g5_meeting_api health 생략", ".env의 G5_API_BASE/G5_API_TOKEN 필요")
             return
-        client = G5MettingApiClient(
+        client = G5MeetingApiClient(
             api_base=cfg.g5_api_base,
             api_token=cfg.g5_api_token,
             bo_table=cfg.g5_bo_table,

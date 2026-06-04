@@ -1,4 +1,4 @@
-r"""SQLite + MariaDB(metting DB) 백업.
+r"""SQLite + MariaDB(meeting DB) 백업.
 
 사용:
     python scripts/backup.py                            # ./data/backups/<날짜>/ 로 백업
@@ -8,12 +8,15 @@ r"""SQLite + MariaDB(metting DB) 백업.
     python scripts/backup.py --no-sqlite                # MariaDB만
 
 Windows 작업 스케줄러 등록 예시:
-    schtasks /create /tn "MettingBackup" /sc DAILY /st 03:00 \
-        /tr "python c:\dev2\metting_record\scripts\backup.py --keep 30"
+    cd meeting_record
+    $project = (Resolve-Path .).Path
+    schtasks /create /tn "MeetingRecordBackup" /sc DAILY /st 03:00 `
+        /tr "cmd /c `"cd /d $project && python scripts\backup.py --keep 30`""
 """
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -25,7 +28,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import load_config
 
 
-MYSQL_DUMP = r"C:\xampp\mysql\bin\mysqldump.exe"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_XAMPP_MYSQLDUMP = r"C:\xampp\mysql\bin\mysqldump.exe"
+
+
+def _env(name: str, default: str = "") -> str:
+    return (os.getenv(name) or default).strip()
+
+
+def _find_mysqldump(explicit: str = "") -> str | None:
+    candidates = [
+        explicit,
+        _env("MYSQLDUMP_PATH"),
+        _env("MYSQL_DUMP_PATH"),
+        shutil.which("mysqldump") or "",
+        DEFAULT_XAMPP_MYSQLDUMP,
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return candidate
+    return None
 
 
 def backup_sqlite(db_path: Path, out_dir: Path) -> Path | None:
@@ -48,33 +70,50 @@ def backup_sqlite(db_path: Path, out_dir: Path) -> Path | None:
         src.close()
         dst.close()
         size_mb = out.stat().st_size / 1024 / 1024
-        print(f"✓ SQLite: {out.name} ({size_mb:.2f} MB)")
+        print(f"[ok] SQLite: {out.name} ({size_mb:.2f} MB)")
         return out
     except Exception as e:
         print(f"[error] SQLite 백업 실패: {e}")
         return None
 
 
-def backup_mariadb(out_dir: Path, db_name: str = "meeting") -> Path | None:
-    """MariaDB metting DB 덤프 (mysqldump)."""
-    if not Path(MYSQL_DUMP).exists():
-        print(f"[skip] mysqldump 없음: {MYSQL_DUMP}")
+def backup_mariadb(
+    out_dir: Path,
+    *,
+    dump_path: str = "",
+    db_name: str = "meeting",
+    user: str = "root",
+    password: str = "",
+    host: str = "127.0.0.1",
+    port: str = "3306",
+) -> Path | None:
+    """MariaDB meeting DB 덤프 (mysqldump)."""
+    mysqldump = _find_mysqldump(dump_path)
+    if not mysqldump:
+        print("[skip] mysqldump 없음: MYSQLDUMP_PATH 설정 또는 PATH 등록 필요")
         return None
     out = out_dir / f"{db_name}.sql"
     cmd = [
-        MYSQL_DUMP, "-u", "root", db_name,
+        mysqldump,
+        "-h", host,
+        "-P", str(port),
+        "-u", user,
+        db_name,
         "--default-character-set=utf8mb4",
         "--routines", "--events", "--triggers",
         "--single-transaction",
         "--result-file=" + str(out),
     ]
+    env = os.environ.copy()
+    if password:
+        env["MYSQL_PWD"] = password
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
         if r.returncode != 0:
             print(f"[error] mysqldump 실패: {r.stderr[:300]}")
             return None
         size_mb = out.stat().st_size / 1024 / 1024
-        print(f"✓ MariaDB: {out.name} ({size_mb:.2f} MB)")
+        print(f"[ok] MariaDB: {out.name} ({size_mb:.2f} MB)")
         return out
     except Exception as e:
         print(f"[error] MariaDB 백업 실패: {e}")
@@ -109,10 +148,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep", type=int, default=30, help="N일 초과 백업 삭제 (기본 30, 0이면 삭제 안 함)")
     parser.add_argument("--no-mysql", action="store_true")
     parser.add_argument("--no-sqlite", action="store_true")
+    parser.add_argument("--mysql-dump-path", default=_env("MYSQLDUMP_PATH") or _env("MYSQL_DUMP_PATH"), help="mysqldump 실행 파일 경로")
+    parser.add_argument("--mysql-db", default=_env("MYSQL_DATABASE", "meeting"), help="MariaDB DB명 (기본 meeting)")
+    parser.add_argument("--mysql-user", default=_env("MYSQL_USER", "root"), help="MariaDB 사용자 (기본 root)")
+    parser.add_argument("--mysql-password", default=_env("MYSQL_PASSWORD"), help="MariaDB 비밀번호")
+    parser.add_argument("--mysql-host", default=_env("MYSQL_HOST", "127.0.0.1"), help="MariaDB 호스트")
+    parser.add_argument("--mysql-port", default=_env("MYSQL_PORT", "3306"), help="MariaDB 포트")
     args = parser.parse_args(argv)
 
     cfg = load_config()
-    base = Path(args.out) if args.out else Path("./data/backups").resolve()
+    base = Path(args.out) if args.out else PROJECT_ROOT / "data" / "backups"
+    base = base.resolve()
     base.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -124,7 +170,15 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_sqlite:
         results.append(backup_sqlite(Path(cfg.db_path), target))
     if not args.no_mysql:
-        results.append(backup_mariadb(target))
+        results.append(backup_mariadb(
+            target,
+            dump_path=args.mysql_dump_path,
+            db_name=args.mysql_db,
+            user=args.mysql_user,
+            password=args.mysql_password,
+            host=args.mysql_host,
+            port=args.mysql_port,
+        ))
 
     success = sum(1 for r in results if r is not None)
     print(f"\n완료: {success}개 항목 백업")

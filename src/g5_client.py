@@ -3,7 +3,7 @@
 그누보드5 plugin/meeting_api PHP endpoint에 HTTP로 회의 게시글/댓글을 등록한다.
 
 멀티 타겟 지원 (로컬 + 원격 동시 등록):
-    G5MultiClient([G5MettingApiClient(local), G5MettingApiClient(remote)])
+    G5MultiClient([G5MeetingApiClient(local), G5MeetingApiClient(remote)])
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Optional
 import requests
 
 
-def build_clients_from_env(cfg) -> list["G5MettingApiClient"]:
+def build_clients_from_env(cfg) -> list["G5MeetingApiClient"]:
     """cfg에서 G5 클라이언트 목록 생성 (단일 또는 멀티 타겟).
 
     .env 옵션:
@@ -34,25 +34,25 @@ def build_clients_from_env(cfg) -> list["G5MettingApiClient"]:
         # 단일 설정 (기존 방식)
         if not cfg.g5_api_base or not cfg.g5_api_token:
             return []
-        return [G5MettingApiClient(
+        return [G5MeetingApiClient(
             api_base=cfg.g5_api_base, api_token=cfg.g5_api_token, bo_table=bo_table,
             name="default",
         )]
 
-    clients: list[G5MettingApiClient] = []
+    clients: list[G5MeetingApiClient] = []
     for name in [t.strip().upper() for t in targets.split(",") if t.strip()]:
         base = (os.getenv(f"G5_API_BASE_{name}") or "").strip()
         token = (os.getenv(f"G5_API_TOKEN_{name}") or "").strip()
         if not base or not token:
             print(f"[warn] G5 target '{name.lower()}' — G5_API_BASE_{name} 또는 G5_API_TOKEN_{name} 누락, 스킵")
             continue
-        clients.append(G5MettingApiClient(
+        clients.append(G5MeetingApiClient(
             api_base=base, api_token=token, bo_table=bo_table, name=name.lower(),
         ))
     return clients
 
 
-def legacy_default_target_name(clients: list["G5MettingApiClient"]) -> str | None:
+def legacy_default_target_name(clients: list["G5MeetingApiClient"]) -> str | None:
     """기존 단일 설정(default) 동기화 행을 어느 named target으로 볼지 결정한다."""
     import os
 
@@ -119,7 +119,7 @@ class G5ClientBase(ABC):
     def delete_post(self, wr_id: int, bo_table: Optional[str] = None) -> dict: ...
 
 
-class G5MettingApiClient(G5ClientBase):
+class G5MeetingApiClient(G5ClientBase):
     """그누보드5 plugin/meeting_api PHP endpoint 호출용."""
 
     def __init__(
@@ -144,7 +144,7 @@ class G5MettingApiClient(G5ClientBase):
         self._session.headers.update({"X-API-Token": api_token})
 
     def __repr__(self):
-        return f"G5MettingApiClient(name={self.name!r}, base={self.api_base!r})"
+        return f"G5MeetingApiClient(name={self.name!r}, base={self.api_base!r})"
 
     def _post(self, path: str, payload: dict, *, max_retries: Optional[int] = None) -> dict:
         url = f"{self.api_base}/{path.lstrip('/')}"
@@ -278,6 +278,10 @@ def format_utterance_comment(utterance: dict) -> str:
     return f"[{mm:02d}:{ss:02d}] {speaker}: {text}"
 
 
+# Backward-compatible alias for the original misspelled public name.
+G5MettingApiClient = G5MeetingApiClient
+
+
 if __name__ == "__main__":
     import json
     import os
@@ -286,7 +290,7 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
 
     load_dotenv()
-    client = G5MettingApiClient(
+    client = G5MeetingApiClient(
         api_base=os.getenv("G5_API_BASE", "http://127.0.0.1/gnuboard5/plugin/meeting_api"),
         api_token=os.getenv("G5_API_TOKEN", ""),
         bo_table=os.getenv("G5_BO_TABLE", "meeting"),
