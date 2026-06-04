@@ -8,6 +8,9 @@
 """
 from __future__ import annotations
 
+import hmac
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -21,6 +24,31 @@ from src import comparator, dictionary, exporter, stats, storage
 
 
 st.set_page_config(page_title="회의록 관리", page_icon="📝", layout="wide")
+
+
+def require_app_auth() -> None:
+    allow_no_auth = os.getenv("STREAMLIT_ALLOW_NO_AUTH", "").lower().strip() in ("1", "true", "yes", "on")
+    if allow_no_auth:
+        st.warning("STREAMLIT_ALLOW_NO_AUTH가 켜져 있어 웹 UI 인증을 건너뜁니다.")
+        return
+
+    password = os.getenv("STREAMLIT_ACCESS_PASSWORD", "").strip()
+    if not password:
+        st.error("STREAMLIT_ACCESS_PASSWORD가 설정되지 않아 웹 UI를 잠갔습니다.")
+        st.code("STREAMLIT_ACCESS_PASSWORD=강력한-비밀번호", language="dotenv")
+        st.stop()
+
+    if st.session_state.get("app_authenticated"):
+        return
+
+    st.title("회의록 관리")
+    entered = st.text_input("비밀번호", type="password")
+    if st.button("로그인"):
+        if hmac.compare_digest(entered, password):
+            st.session_state["app_authenticated"] = True
+            st.rerun()
+        st.error("비밀번호가 맞지 않습니다.")
+    st.stop()
 
 
 @st.cache_resource
@@ -37,6 +65,24 @@ def _ts(sec: float) -> str:
 
 def _fmt_dur(sec: float) -> str:
     return stats.format_duration(sec)
+
+
+def _safe_filename_part(value: str, *, max_len: int = 40) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._")
+    return (cleaned or "meeting")[:max_len]
+
+
+def _g5_board_url(api_base: str, bo_table: str, wr_id: str | int) -> str:
+    base = api_base.rstrip("/")
+    for suffix in ("/plugin/meeting_api", "/g5_meeting_api"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return f"{base}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}"
+
+
+require_app_auth()
 
 
 # ── 사이드바: 페이지 선택 ─────────────────────────────────
@@ -203,13 +249,13 @@ def render_meeting_detail(meeting_id: int):
         col1, col2 = st.columns(2)
         include_transcript = col1.checkbox("발화 전문 포함", value=True)
         if col2.button("📥 .docx 다운로드", use_container_width=True):
-            out_path = Path(f"./data/exports/{meeting_id:03d}_{m['title'][:30]}.docx")
+            out_path = Path("./data/exports") / f"{meeting_id:03d}_{_safe_filename_part(m['title'])}.docx"
             exporter.to_docx(m, utts, out_path, include_transcript=include_transcript)
             with open(out_path, "rb") as f:
                 st.download_button("다운로드 받기", f.read(), file_name=out_path.name)
 
         if col1.button("🌐 .html 다운로드", use_container_width=True):
-            out_path = Path(f"./data/exports/{meeting_id:03d}_{m['title'][:30]}.html")
+            out_path = Path("./data/exports") / f"{meeting_id:03d}_{_safe_filename_part(m['title'])}.html"
             exporter.to_html(m, utts, out_path, include_transcript=include_transcript)
             with open(out_path, "rb") as f:
                 st.download_button("HTML 다운로드", f.read(), file_name=out_path.name)
@@ -217,7 +263,7 @@ def render_meeting_detail(meeting_id: int):
         st.divider()
         st.caption("그누보드5 게시판 링크")
         if m["remote_post_id"]:
-            g5_url = f"{cfg.g5_api_base.replace('/g5_meeting_api','')}/gnuboard5/bbs/board.php?bo_table={cfg.g5_bo_table}&wr_id={m['remote_post_id']}"
+            g5_url = _g5_board_url(cfg.g5_api_base, cfg.g5_bo_table, m["remote_post_id"])
             st.link_button("🔗 그누보드5에서 보기", g5_url)
         else:
             st.info("그누보드5에 미등록 — `python main.py --resync` 실행")

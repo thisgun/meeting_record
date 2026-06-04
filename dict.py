@@ -121,7 +121,7 @@ def cmd_apply_to_meeting(args) -> int:
     import json
     import subprocess
     import tempfile
-    from src import storage
+    from src import cache, storage
 
     cfg = load_config()
     meeting = storage.get_meeting(cfg.db_path, args.meeting_id)
@@ -209,8 +209,7 @@ def cmd_apply_to_meeting(args) -> int:
 
     # 5) 캐시 파일도 갱신
     src_file = meeting["meeting"]["source_file"]
-    cache_name = Path(src_file).stem + ".segments.json"
-    cache_path = cfg.work_dir / cache_name
+    cache_path = cache.segments_cache_path(src_file, cfg.work_dir)
     if cache_path.exists():
         cache_path.write_text(json.dumps([
             {"start": s["start"], "end": s["end"], "speaker": s["speaker"], "text": s["text"]}

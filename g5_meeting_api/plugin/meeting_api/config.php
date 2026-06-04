@@ -33,11 +33,5 @@ if (!defined('meeting_WR_PASSWORD')) define('meeting_WR_PASSWORD', 'meeting_bot'
 if (!defined('meeting_WR_EMAIL')) define('meeting_WR_EMAIL', '');
 if (!defined('meeting_WR_HOMEPAGE')) define('meeting_WR_HOMEPAGE', '');
 
-// 디버그 모드 자동: localhost면 true, 외부 도메인이면 false
-if (!defined('meeting_API_DEBUG')) {
-    $__is_remote = (
-        !empty($_SERVER['HTTP_HOST'])
-        && !preg_match('/^(127\.0\.0\.\d+|localhost|::1)/', $_SERVER['HTTP_HOST'])
-    );
-    define('meeting_API_DEBUG', !$__is_remote);
-}
+// 운영 안전을 위해 디버그는 기본 false. 필요할 때 config.local.php에서 명시적으로 true 지정.
+if (!defined('meeting_API_DEBUG')) define('meeting_API_DEBUG', false);

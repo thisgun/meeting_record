@@ -169,9 +169,22 @@ def list_unsynced(db_path: str | Path) -> list[dict]:
     """remote 업로드 실패/대기 중인 회의."""
     with connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT * FROM meetings WHERE sync_status IN ('pending', 'failed') ORDER BY id"
+            "SELECT * FROM meetings WHERE sync_status IN ('pending', 'partial', 'failed') ORDER BY id"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def mark_meeting_posted(
+    db_path: str | Path, meeting_id: int, remote_post_id: str
+) -> None:
+    """게시글 생성은 성공했고 댓글 동기화는 진행 중인 상태로 표시."""
+    with connect(db_path) as conn:
+        conn.execute(
+            """UPDATE meetings
+                 SET sync_status = 'partial', remote_post_id = ?, sync_error = NULL
+               WHERE id = ?""",
+            (remote_post_id, meeting_id),
+        )
 
 
 def mark_meeting_synced(
@@ -183,6 +196,19 @@ def mark_meeting_synced(
                  SET sync_status = 'synced', remote_post_id = ?, sync_error = NULL
                WHERE id = ?""",
             (remote_post_id, meeting_id),
+        )
+
+
+def mark_meeting_partial(
+    db_path: str | Path, meeting_id: int, remote_post_id: str, error: str
+) -> None:
+    """게시글은 있으나 일부 댓글 동기화가 남아 있는 상태."""
+    with connect(db_path) as conn:
+        conn.execute(
+            """UPDATE meetings
+                 SET sync_status = 'partial', remote_post_id = ?, sync_error = ?
+               WHERE id = ?""",
+            (remote_post_id, error[:2000], meeting_id),
         )
 
 

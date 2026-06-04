@@ -71,8 +71,8 @@ function require_auth() {
     if (!meeting_API_TOKEN) {
         api_error(500, 'Server misconfigured: API token is empty in config.php');
     }
-    if ($is_default && !meeting_API_DEBUG) {
-        api_error(500, 'Server misconfigured: default API token used in production. Change meeting_API_TOKEN in config.php.');
+    if ($is_default) {
+        api_error(500, 'Server misconfigured: default API token is not allowed. Set meeting_API_TOKEN in config.local.php.');
     }
     if (!hash_equals(meeting_API_TOKEN, $token)) {
         api_error(401, 'Invalid or missing X-API-Token');
@@ -93,6 +93,44 @@ function read_json_body() {
 }
 
 /**
+ * 게시판 코드 검증.
+ *
+ * 그누보드 게시판 코드는 영문/숫자/underscore만 허용한다. 잘못된 문자를
+ * 조용히 제거하면 의도와 다른 게시판에 쓰일 수 있으므로 400으로 막는다.
+ */
+function meeting_normalize_bo_table($bo_table) {
+    $bo_table = trim((string)$bo_table);
+    if ($bo_table === '' || !preg_match('/^[A-Za-z0-9_]+$/', $bo_table)) {
+        api_error(400, 'Invalid bo_table. Use letters, numbers, and underscore only.');
+    }
+    return $bo_table;
+}
+
+/**
+ * SQL 문자열 escape.
+ *
+ * common.php 로드 후 그누보드의 DB escape 함수를 우선 사용한다.
+ */
+function meeting_sql_escape($value) {
+    $value = (string)$value;
+    if (function_exists('sql_escape_string')) {
+        return sql_escape_string($value);
+    }
+    if (function_exists('sql_real_escape_string')) {
+        return sql_real_escape_string($value);
+    }
+    api_error(500, 'Server misconfigured: SQL escape function unavailable.');
+}
+
+function meeting_sql_identifier($name) {
+    $name = trim((string)$name);
+    if ($name === '' || !preg_match('/^[A-Za-z0-9_]+$/', $name)) {
+        api_error(500, 'Unsafe SQL identifier.');
+    }
+    return "`$name`";
+}
+
+/**
  * 게시판 정보 조회 (write_table 이름 등 포함)
  *
  * 호출 전에 _load_gnuboard5.php가 endpoint의 전역 스코프에서 require되어야 한다.
@@ -100,8 +138,10 @@ function read_json_body() {
  */
 function get_board_or_die($bo_table) {
     global $g5;
-    $bo_table = preg_replace('/[^a-z0-9_]/i', '', $bo_table);
-    $row = sql_fetch("SELECT * FROM {$g5['board_table']} WHERE bo_table = '$bo_table'");
+    $bo_table = meeting_normalize_bo_table($bo_table);
+    $bo_table_esc = meeting_sql_escape($bo_table);
+    $board_table_sql = meeting_sql_identifier($g5['board_table']);
+    $row = sql_fetch("SELECT * FROM $board_table_sql WHERE bo_table = '$bo_table_esc'");
     if (!$row) {
         api_error(404, "Board not found: bo_table=$bo_table. 그누보드5 관리자에서 게시판을 먼저 생성하세요.");
     }
@@ -110,6 +150,6 @@ function get_board_or_die($bo_table) {
 
 function write_table_of($bo_table) {
     global $g5;
-    $bo_table = preg_replace('/[^a-z0-9_]/i', '', $bo_table);
+    $bo_table = meeting_normalize_bo_table($bo_table);
     return $g5['write_prefix'] . $bo_table;
 }

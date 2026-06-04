@@ -32,6 +32,8 @@ def build_clients_from_env(cfg) -> list["G5MettingApiClient"]:
 
     if not targets:
         # 단일 설정 (기존 방식)
+        if not cfg.g5_api_base or not cfg.g5_api_token:
+            return []
         return [G5MettingApiClient(
             api_base=cfg.g5_api_base, api_token=cfg.g5_api_token, bo_table=bo_table,
             name="default",

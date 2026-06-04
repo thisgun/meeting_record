@@ -234,16 +234,22 @@ def check_notifier():
 def check_xampp():
     section("XAMPP (MariaDB / Apache / PHP)")
     try:
-        import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1/gnuboard5/plugin/meeting_api/health.php", timeout=3) as r:
-            import json
-            data = json.loads(r.read())
-            if data.get("ok"):
-                ok("g5_meeting_api health", f"PHP {data.get('php_version')}, DB={data.get('db_connected')}, board={data.get('board_exists')}")
-            else:
-                warn("API health 응답에 ok=false", str(data)[:200])
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from config import load_config
+        from src.g5_client import G5MettingApiClient
+        cfg = load_config()
+        if not cfg.g5_api_base or not cfg.g5_api_token:
+            warn("g5_meeting_api health 생략", ".env의 G5_API_BASE/G5_API_TOKEN 필요")
+            return
+        client = G5MettingApiClient(
+            api_base=cfg.g5_api_base,
+            api_token=cfg.g5_api_token,
+            bo_table=cfg.g5_bo_table,
+        )
+        data = client.health()
+        ok("g5_meeting_api health", f"PHP {data.get('php_version')}, DB={data.get('db_connected')}, board={data.get('board_exists')}")
     except Exception as e:
-        warn("g5_meeting_api 접속 실패", "Apache 또는 MariaDB가 중지된 상태일 수 있음")
+        warn("g5_meeting_api 접속 실패", str(e)[:160])
 
 
 def check_g5_targets():

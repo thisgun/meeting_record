@@ -18,44 +18,46 @@ require_auth();
 $m_body = read_json_body();
 $m_wr_id = (int)($m_body['wr_id'] ?? 0);
 $m_content = (string)($m_body['content'] ?? '');
-$m_bo_table = trim((string)($m_body['bo_table'] ?? meeting_BO_TABLE));
+$m_bo_table = meeting_normalize_bo_table($m_body['bo_table'] ?? meeting_BO_TABLE);
 $m_author_name = trim((string)($m_body['author_name'] ?? ''));  // 선택: 화자별 작성자명
 
 if ($m_wr_id <= 0) api_error(400, 'wr_id (int, > 0) is required');
 if ($m_content === '') api_error(400, 'content is required');
-if ($m_bo_table === '') api_error(400, 'bo_table is required');
 
 require_once __DIR__ . '/_load_gnuboard5.php';
 
 $board = get_board_or_die($m_bo_table);
 $write_table = write_table_of($m_bo_table);
+$write_table_sql = meeting_sql_identifier($write_table);
+$board_new_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_new_table']);
+$board_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_table']);
 
-$parent = sql_fetch("SELECT wr_id, wr_num, ca_name FROM $write_table
+$parent = sql_fetch("SELECT wr_id, wr_num, ca_name FROM $write_table_sql
     WHERE wr_id = '$m_wr_id' AND wr_is_comment = 0");
 if (!$parent) {
     api_error(404, "Parent post not found: wr_id=$m_wr_id");
 }
 
 $row = sql_fetch("SELECT MAX(wr_comment) AS max_comment
-    FROM $write_table
+    FROM $write_table_sql
     WHERE wr_parent = '$m_wr_id' AND wr_is_comment = 1");
 $tmp_comment = (int)($row['max_comment'] ?? 0) + 1;
 
-$wr_content = addslashes($m_content);
+$wr_content = meeting_sql_escape($m_content);
 // 화자별 작성자명: 요청에 author_name 있으면 사용, 없으면 기본값
 $effective_name = $m_author_name !== '' ? $m_author_name : meeting_WR_NAME;
-$wr_name = addslashes(mb_substr($effective_name, 0, 50, 'UTF-8'));
-$wr_password = meeting_WR_PASSWORD ? sql_password(meeting_WR_PASSWORD) : '';
-$wr_email = addslashes(meeting_WR_EMAIL);
-$wr_homepage = addslashes(meeting_WR_HOMEPAGE);
-$mb_id_esc = addslashes(meeting_MB_ID);
-$ca_name = addslashes($parent['ca_name'] ?? '');
+$wr_name = meeting_sql_escape(mb_substr($effective_name, 0, 50, 'UTF-8'));
+$wr_password = meeting_WR_PASSWORD ? meeting_sql_escape(sql_password(meeting_WR_PASSWORD)) : '';
+$wr_email = meeting_sql_escape(meeting_WR_EMAIL);
+$wr_homepage = meeting_sql_escape(meeting_WR_HOMEPAGE);
+$mb_id_esc = meeting_sql_escape(meeting_MB_ID);
+$ca_name = meeting_sql_escape($parent['ca_name'] ?? '');
 $wr_num = (int)$parent['wr_num'];
-$ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+$ip = meeting_sql_escape($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
 $now = G5_TIME_YMDHIS;
-$bo_table_esc = addslashes($m_bo_table);
+$bo_table_esc = meeting_sql_escape($m_bo_table);
 
-$sql = "INSERT INTO $write_table SET
+$sql = "INSERT INTO $write_table_sql SET
     ca_name = '$ca_name',
     wr_option = '',
     wr_num = '$wr_num',
@@ -83,15 +85,15 @@ if (!$new_comment_id) {
     api_error(500, 'Failed to insert comment');
 }
 
-sql_query("UPDATE $write_table
+sql_query("UPDATE $write_table_sql
     SET wr_comment = wr_comment + 1, wr_last = '$now'
     WHERE wr_id = '$m_wr_id'");
 
-sql_query("INSERT INTO {$GLOBALS['g5']['board_new_table']}
+sql_query("INSERT INTO $board_new_table_sql
     (bo_table, wr_id, wr_parent, bn_datetime, mb_id)
     VALUES ('$bo_table_esc', '$new_comment_id', '$m_wr_id', '$now', '$mb_id_esc')");
 
-sql_query("UPDATE {$GLOBALS['g5']['board_table']}
+sql_query("UPDATE $board_table_sql
     SET bo_count_comment = bo_count_comment + 1
     WHERE bo_table = '$bo_table_esc'");
 

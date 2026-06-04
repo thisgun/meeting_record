@@ -27,30 +27,32 @@ require_auth();
 $m_body = read_json_body();
 $m_subject = trim((string)($m_body['subject'] ?? ''));
 $m_content = (string)($m_body['content'] ?? '');
-$m_bo_table = trim((string)($m_body['bo_table'] ?? meeting_BO_TABLE));
+$m_bo_table = meeting_normalize_bo_table($m_body['bo_table'] ?? meeting_BO_TABLE);
 
 if ($m_subject === '') api_error(400, 'subject is required');
 if ($m_content === '') api_error(400, 'content is required');
-if ($m_bo_table === '') api_error(400, 'bo_table is required (and meeting_BO_TABLE not set)');
 
 require_once __DIR__ . '/_load_gnuboard5.php';
 
 $board = get_board_or_die($m_bo_table);
 $write_table = write_table_of($m_bo_table);
+$write_table_sql = meeting_sql_identifier($write_table);
+$board_new_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_new_table']);
+$board_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_table']);
 
-$wr_subject = addslashes(mb_substr($m_subject, 0, 255, 'UTF-8'));
-$wr_content = addslashes($m_content);
-$wr_name = addslashes(meeting_WR_NAME);
-$wr_password = meeting_WR_PASSWORD ? sql_password(meeting_WR_PASSWORD) : '';
-$wr_email = addslashes(meeting_WR_EMAIL);
-$wr_homepage = addslashes(meeting_WR_HOMEPAGE);
-$mb_id_esc = addslashes(meeting_MB_ID);
-$ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+$wr_subject = meeting_sql_escape(mb_substr($m_subject, 0, 255, 'UTF-8'));
+$wr_content = meeting_sql_escape($m_content);
+$wr_name = meeting_sql_escape(meeting_WR_NAME);
+$wr_password = meeting_WR_PASSWORD ? meeting_sql_escape(sql_password(meeting_WR_PASSWORD)) : '';
+$wr_email = meeting_sql_escape(meeting_WR_EMAIL);
+$wr_homepage = meeting_sql_escape(meeting_WR_HOMEPAGE);
+$mb_id_esc = meeting_sql_escape(meeting_MB_ID);
+$ip = meeting_sql_escape($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
 $now = G5_TIME_YMDHIS;
-$bo_table_esc = addslashes($m_bo_table);
+$bo_table_esc = meeting_sql_escape($m_bo_table);
 
-$sql = "INSERT INTO $write_table SET
-    wr_num = (SELECT IFNULL(MIN(wr_num) - 1, -1) FROM $write_table AS sq),
+$sql = "INSERT INTO $write_table_sql SET
+    wr_num = (SELECT IFNULL(MIN(wr_num) - 1, -1) FROM $write_table_sql AS sq),
     wr_reply = '',
     wr_comment = 0,
     ca_name = '',
@@ -77,13 +79,13 @@ if (!$new_wr_id) {
     api_error(500, 'Failed to insert post (sql_insert_id returned 0)');
 }
 
-sql_query("UPDATE $write_table SET wr_parent = '$new_wr_id' WHERE wr_id = '$new_wr_id'");
+sql_query("UPDATE $write_table_sql SET wr_parent = '$new_wr_id' WHERE wr_id = '$new_wr_id'");
 
-sql_query("INSERT INTO {$GLOBALS['g5']['board_new_table']}
+sql_query("INSERT INTO $board_new_table_sql
     (bo_table, wr_id, wr_parent, bn_datetime, mb_id)
     VALUES ('$bo_table_esc', '$new_wr_id', '$new_wr_id', '$now', '$mb_id_esc')");
 
-sql_query("UPDATE {$GLOBALS['g5']['board_table']}
+sql_query("UPDATE $board_table_sql
     SET bo_count_write = bo_count_write + 1
     WHERE bo_table = '$bo_table_esc'");
 

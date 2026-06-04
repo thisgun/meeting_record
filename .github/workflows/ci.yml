@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  quick-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: PHP 설정
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+
+      - name: Python 문법 검사
+        run: python -m compileall -q .
+
+      - name: PII 마스킹 샘플 테스트
+        run: python scripts/test_pii.py
+
+      - name: PHP 문법 검사
+        run: |
+          find g5_meeting_api/plugin/meeting_api -name '*.php' -print0 \
+            | xargs -0 -n1 php -l

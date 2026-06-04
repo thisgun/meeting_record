@@ -6,6 +6,7 @@
  */
 require_once __DIR__ . '/_bootstrap.php';
 require_method('GET');
+require_auth();
 
 $report = [
     'php_version' => PHP_VERSION,
@@ -25,7 +26,10 @@ global $g5;
 $db_ok = sql_fetch("SELECT 1 AS v");
 $report['db_connected'] = ($db_ok && $db_ok['v'] == 1);
 
-$board = sql_fetch("SELECT bo_table, bo_subject FROM {$g5['board_table']} WHERE bo_table = '" . meeting_BO_TABLE . "'");
+$bo_table = meeting_normalize_bo_table(meeting_BO_TABLE);
+$bo_table_esc = meeting_sql_escape($bo_table);
+$board_table_sql = meeting_sql_identifier($g5['board_table']);
+$board = sql_fetch("SELECT bo_table, bo_subject FROM $board_table_sql WHERE bo_table = '$bo_table_esc'");
 $report['board_exists'] = (bool)$board;
 $report['board_subject'] = $board['bo_subject'] ?? null;
 

@@ -24,9 +24,9 @@ gnuboard5/
 
 1. **FTP 업로드** — `plugin/meeting_api/` 를 그누보드5 plugin 안에 그대로
 2. **운영 토큰 설정** — `config.local.php.example` → `config.local.php` 복사 후 토큰 변경
-3. **게시판 자동 생성** — `https://YOUR-DOMAIN/<그누보드폴더>/plugin/meeting_api/setup_board.php?token=YOUR_TOKEN`
+3. **게시판 자동 생성** — `setup_board.php`에 `X-API-Token` 헤더를 포함한 POST 요청 1회
 4. **setup_board.php 삭제** (보안)
-5. **헬스체크** — `https://YOUR-DOMAIN/<그누보드폴더>/plugin/meeting_api/health.php`
+5. **헬스체크** — `health.php`에 `X-API-Token` 헤더를 포함한 GET 요청
 
 자세한 가이드는 상위 폴더의 [README.md](../README.md) 참고.
 
@@ -37,6 +37,14 @@ gnuboard5/
 | GET | `health.php` | 환경 점검 |
 | POST | `post.php` | 회의 요약 → 게시글 |
 | POST | `comment.php` | 발화 → 댓글 |
-| GET | `setup_board.php?token=...` | 게시판 1회 자동 생성 |
+| POST | `setup_board.php` | 게시판 1회 자동 생성 |
 
-모든 POST 요청은 헤더 `X-API-Token` 필수.
+모든 API 요청은 헤더 `X-API-Token` 필수.
+
+```bash
+curl -H "X-API-Token: YOUR_TOKEN" \
+  https://YOUR-DOMAIN/<그누보드폴더>/plugin/meeting_api/health.php
+
+curl -X POST -H "X-API-Token: YOUR_TOKEN" \
+  https://YOUR-DOMAIN/<그누보드폴더>/plugin/meeting_api/setup_board.php
+```
