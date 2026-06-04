@@ -119,9 +119,8 @@ def cmd_import(args) -> int:
 def cmd_apply_to_meeting(args) -> int:
     """기존 회의의 발화/요약에 사전 치환 적용 + 그누보드5 갱신."""
     import json
-    import subprocess
-    import tempfile
     from src import cache, storage
+    from src.g5_client import G5ApiError, build_clients_from_env, format_utterance_comment
 
     cfg = load_config()
     meeting = storage.get_meeting(cfg.db_path, args.meeting_id)
@@ -154,58 +153,76 @@ def cmd_apply_to_meeting(args) -> int:
         return 0
 
     # 3) SQLite 업데이트
-    import sqlite3
-    with sqlite3.connect(str(cfg.db_path)) as conn:
-        if title_changed or md_changed:
-            conn.execute(
-                "UPDATE meetings SET title=?, summary_md=? WHERE id=?",
-                (new_title, new_md, args.meeting_id),
-            )
-        for orig, new in zip(utts, new_segs):
-            if orig["text"] != new["text"]:
-                conn.execute("UPDATE utterances SET text=? WHERE id=?", (new["text"], orig["id"]))
+    if title_changed or md_changed:
+        storage.update_meeting_summary(
+            cfg.db_path,
+            args.meeting_id,
+            title=new_title,
+            summary_md=new_md,
+        )
+    for orig, new in zip(utts, new_segs):
+        if orig["text"] != new["text"]:
+            storage.update_utterance_text(cfg.db_path, orig["id"], new["text"])
     print("✓ SQLite 갱신")
 
-    # 4) 그누보드5도 갱신
+    # 4) 그누보드5도 갱신 (직접 MySQL 대신 HTTP API 사용)
     if not args.skip_remote and meeting["meeting"]["remote_post_id"]:
         wr_id = int(meeting["meeting"]["remote_post_id"])
-        mysql = r"C:\xampp\mysql\bin\mysql.exe"
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False, encoding="utf-8") as f:
-            sql_path = f.name
-            if title_changed or md_changed:
-                esc_t = new_title.replace("\\", "\\\\").replace("'", "''")
-                esc_c = new_md.replace("\\", "\\\\").replace("'", "''")
-                f.write(f"UPDATE g5_write_meeting SET wr_subject='{esc_t}', wr_content='{esc_c}' WHERE wr_id={wr_id};\n")
-            # 댓글들도 ORDER BY wr_id로 매핑 가능
-            f.write(f"-- comments will be matched in Python loop\n")
+        clients = build_clients_from_env(cfg)
+        if not clients:
+            print("[warn] G5 클라이언트 없음 — 원격 갱신 생략", file=sys.stderr)
+        else:
+            client = clients[0]
+            print(f"그누보드5 갱신 대상: [{client.name}] {client.api_base}")
+            remote_updates = 0
+            try:
+                if title_changed or md_changed:
+                    client.update_post(
+                        wr_id,
+                        subject=new_title if title_changed else None,
+                        content=new_md if md_changed else None,
+                    )
+                    remote_updates += 1
 
-        # 댓글은 Python에서 처리 (개수/순서 정밀 매칭)
-        if n_changed > 0:
-            result = subprocess.run(
-                [mysql, "-u", "root", "meeting", "-N", "-B", "-e",
-                 f"SELECT wr_id FROM g5_write_meeting WHERE wr_parent={wr_id} AND wr_is_comment=1 ORDER BY wr_id"],
-                capture_output=True, text=True, encoding="utf-8",
-            )
-            comment_ids = [int(x) for x in result.stdout.strip().split("\n") if x]
-            updates = []
-            for cid, orig, new in zip(comment_ids, utts, new_segs):
-                if orig["text"] != new["text"]:
-                    # 댓글 본문은 "[mm:ss] 사용자N: 텍스트" 형식. 텍스트 부분만 치환.
-                    # 안전하게 새 본문 전체를 만들어 갱신.
-                    mm, sec = divmod(int(new["start"]), 60)
-                    new_content = f"[{mm:02d}:{sec:02d}] {new['speaker']}: {new['text']}"
-                    esc = new_content.replace("\\", "\\\\").replace("'", "''")
-                    updates.append(f"UPDATE g5_write_meeting SET wr_content='{esc}' WHERE wr_id={cid};")
-            with open(sql_path, "a", encoding="utf-8") as f:
-                f.write("\n".join(updates))
+                comments = []
+                needs_comment_lookup = any(
+                    orig["text"] != new["text"] and not orig.get("remote_comment_id")
+                    for orig, new in zip(utts, new_segs)
+                )
+                if needs_comment_lookup:
+                    comments = client.list_comments(wr_id)
+                    if len(comments) != len(utts):
+                        print(
+                            f"[warn] 원격 댓글 수({len(comments)})와 로컬 발화 수({len(utts)})가 달라 순서 매핑이 부정확할 수 있음",
+                            file=sys.stderr,
+                        )
 
-        subprocess.run(
-            [mysql, "-u", "root", "meeting", "--default-character-set=utf8mb4"],
-            stdin=open(sql_path, encoding="utf-8"),
-            capture_output=True, text=True, encoding="utf-8",
-        )
-        Path(sql_path).unlink(missing_ok=True)
-        print(f"✓ 그누보드5 wr_id={wr_id} 갱신 (게시글 + 댓글 {n_changed}건)")
+                for idx, (orig, new) in enumerate(zip(utts, new_segs)):
+                    if orig["text"] == new["text"]:
+                        continue
+                    comment_id = orig.get("remote_comment_id")
+                    if not comment_id and idx < len(comments):
+                        comment_id = comments[idx].get("comment_id")
+                        if comment_id:
+                            storage.mark_utterance_synced(cfg.db_path, orig["id"], str(comment_id))
+                    if not comment_id:
+                        print(f"[warn] 발화 id={orig['id']}의 원격 댓글 ID를 찾지 못해 원격 갱신 스킵", file=sys.stderr)
+                        continue
+                    utt_for_comment = {
+                        "speaker": new["speaker"],
+                        "start": new["start"],
+                        "end": new["end"],
+                        "text": new["text"],
+                    }
+                    client.update_comment(
+                        int(comment_id),
+                        content=format_utterance_comment(utt_for_comment),
+                    )
+                    remote_updates += 1
+                print(f"✓ 그누보드5 wr_id={wr_id} 갱신 ({remote_updates}건)")
+            except G5ApiError as e:
+                print(f"[error] 그누보드5 갱신 실패: {e}", file=sys.stderr)
+                return 2
 
     # 5) 캐시 파일도 갱신
     src_file = meeting["meeting"]["source_file"]

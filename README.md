@@ -132,7 +132,8 @@ python -m streamlit run app.py
 ┌──────────────────────────────────────────────────────┬─────────┐
 │  ② PHP REST API  (c:\dev2\g5_meeting_api\)           │         │
 │                                                       │         │
-│   /health.php  /post.php  /comment.php  ◄────────────┘         │
+│   /health.php  /post.php  /comment.php  /update_*.php          │
+│   /list_comments.php  /delete_post.php ◄────────────┘          │
 │        │                                                       │
 │        │ require_once "../gnuboard5/common.php"                │
 │        ▼                                                       │
@@ -191,14 +192,20 @@ c:\dev2\
 │   └── tests\                   # 테스트용 음성 샘플
 │       └── test_10min.mp3
 │
-├── g5_meeting_api\            ← ② PHP REST API
-│   ├── _bootstrap.php           # 공통 헬퍼: 인증, JSON 응답
-│   ├── _load_gnuboard5.php      # 그누보드5 common.php 로드 (트릭 포함)
-│   ├── config.php               # API 토큰, bo_table 설정
-│   ├── health.php               # GET: 헬스 체크
-│   ├── post.php                 # POST: 회의 요약을 게시글로 등록
-│   ├── comment.php              # POST: 발화 1건을 댓글로 등록
-│   └── README.md
+├── g5_meeting_api\            ← ② PHP REST API 배포 패키지
+│   ├── README.md
+│   └── plugin\meeting_api\
+│       ├── _bootstrap.php       # 공통 헬퍼: 인증, JSON 응답
+│       ├── _load_gnuboard5.php  # 그누보드5 common.php 로드 (트릭 포함)
+│       ├── config.php           # API 토큰, bo_table 설정
+│       ├── health.php           # GET: 헬스 체크
+│       ├── post.php             # POST: 회의 요약을 게시글로 등록
+│       ├── comment.php          # POST: 발화 1건을 댓글로 등록
+│       ├── update_post.php      # POST: 게시글 제목/본문 수정
+│       ├── list_comments.php    # POST: 게시글 댓글 목록 조회
+│       ├── update_comment.php   # POST: 댓글 본문/작성자 수정
+│       ├── delete_post.php      # POST: 게시글과 댓글 삭제
+│       └── setup_board.php      # POST: 게시판 자동 생성
 │
 └── gnuboard5\                 ← ③ 그누보드5 원본 (절대 수정 금지)
     ├── common.php               # 시스템 핵심
@@ -790,6 +797,10 @@ gnuboard5/                         ← 원본 (수정 안 함)
         ├── health.php
         ├── post.php
         ├── comment.php
+        ├── update_post.php
+        ├── list_comments.php
+        ├── update_comment.php
+        ├── delete_post.php
         └── setup_board.php        ← 게시판 자동 생성 (1회 후 삭제)
 ```
 
@@ -849,7 +860,7 @@ G5_API_TOKEN_REMOTE=원격_토큰
 
 ```powershell
 python doctor.py                                # G5 타겟 섹션
-python scripts/check_g5_remote.py               # 전체 타겟 health + 테스트 글
+python scripts/check_g5_remote.py               # 전체 타겟 health + 쓰기/수정/삭제 테스트
 python scripts/check_g5_remote.py --target remote
 ```
 

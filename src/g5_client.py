@@ -72,6 +72,30 @@ class G5ClientBase(ABC):
         author_name: Optional[str] = None,
     ) -> dict: ...
 
+    @abstractmethod
+    def update_post(
+        self,
+        wr_id: int,
+        subject: Optional[str] = None,
+        content: Optional[str] = None,
+        bo_table: Optional[str] = None,
+    ) -> dict: ...
+
+    @abstractmethod
+    def list_comments(self, wr_id: int, bo_table: Optional[str] = None) -> list[dict]: ...
+
+    @abstractmethod
+    def update_comment(
+        self,
+        comment_id: int,
+        content: Optional[str] = None,
+        bo_table: Optional[str] = None,
+        author_name: Optional[str] = None,
+    ) -> dict: ...
+
+    @abstractmethod
+    def delete_post(self, wr_id: int, bo_table: Optional[str] = None) -> dict: ...
+
 
 class G5MettingApiClient(G5ClientBase):
     """c:\\dev2\\g5_meeting_api 의 PHP endpoint 호출용."""
@@ -160,6 +184,55 @@ class G5MettingApiClient(G5ClientBase):
         if author_name:
             payload["author_name"] = author_name
         return self._post("comment.php", payload)
+
+    def update_post(
+        self,
+        wr_id: int,
+        subject: Optional[str] = None,
+        content: Optional[str] = None,
+        bo_table: Optional[str] = None,
+    ) -> dict:
+        payload = {
+            "wr_id": int(wr_id),
+            "bo_table": bo_table or self.bo_table,
+        }
+        if subject is not None:
+            payload["subject"] = subject
+        if content is not None:
+            payload["content"] = content
+        return self._post("update_post.php", payload)
+
+    def list_comments(self, wr_id: int, bo_table: Optional[str] = None) -> list[dict]:
+        payload = {
+            "wr_id": int(wr_id),
+            "bo_table": bo_table or self.bo_table,
+        }
+        data = self._post("list_comments.php", payload)
+        return list(data.get("comments") or [])
+
+    def update_comment(
+        self,
+        comment_id: int,
+        content: Optional[str] = None,
+        bo_table: Optional[str] = None,
+        author_name: Optional[str] = None,
+    ) -> dict:
+        payload = {
+            "comment_id": int(comment_id),
+            "bo_table": bo_table or self.bo_table,
+        }
+        if content is not None:
+            payload["content"] = content
+        if author_name is not None:
+            payload["author_name"] = author_name
+        return self._post("update_comment.php", payload)
+
+    def delete_post(self, wr_id: int, bo_table: Optional[str] = None) -> dict:
+        payload = {
+            "wr_id": int(wr_id),
+            "bo_table": bo_table or self.bo_table,
+        }
+        return self._post("delete_post.php", payload)
 
 
 def format_utterance_comment(utterance: dict) -> str:

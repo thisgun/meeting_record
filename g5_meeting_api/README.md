@@ -17,6 +17,10 @@ gnuboard5/
         ├── health.php
         ├── post.php
         ├── comment.php
+        ├── update_post.php
+        ├── list_comments.php
+        ├── update_comment.php
+        ├── delete_post.php
         └── setup_board.php           ← 게시판 자동 생성 후 삭제
 ```
 
@@ -37,6 +41,10 @@ gnuboard5/
 | GET | `health.php` | 환경 점검 |
 | POST | `post.php` | 회의 요약 → 게시글 |
 | POST | `comment.php` | 발화 → 댓글 |
+| POST | `update_post.php` | 게시글 제목/본문 수정 |
+| POST | `list_comments.php` | 게시글 댓글 목록 조회 |
+| POST | `update_comment.php` | 댓글 본문/작성자 수정 |
+| POST | `delete_post.php` | 게시글과 댓글 삭제 |
 | POST | `setup_board.php` | 게시판 1회 자동 생성 |
 
 모든 API 요청은 헤더 `X-API-Token` 필수.

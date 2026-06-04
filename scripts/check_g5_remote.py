@@ -7,7 +7,7 @@
 각 타겟에 대해:
 1. health.php 응답 확인
 2. 게시판 존재 여부
-3. 인증 동작 (post 시도, 즉시 삭제)
+3. 인증/쓰기 동작 (post/comment/update/list/delete 시도)
 """
 from __future__ import annotations
 
@@ -66,19 +66,37 @@ def main() -> int:
             fail += 1
             continue
 
-        # 2. 인증 동작 확인 (post + comment, 즉시 삭제는 사용자 수동)
-        print(f"\n시도: 테스트 게시글 1건 작성 (확인 후 수동 삭제 권장)")
+        # 2. 인증 동작 확인 (post + comment + update + list + delete)
+        print(f"\n시도: 테스트 게시글 1건 작성 후 자동 삭제")
+        wr_id = None
         try:
             post = c.create_post(
-                subject="[연결 테스트] 삭제해 주세요",
-                content="g5_meeting_api 연결 점검용. 확인 후 삭제하세요.",
+                subject="[연결 테스트] 자동 삭제 예정",
+                content="g5_meeting_api 연결 점검용. 곧 자동 삭제됩니다.",
             )
             wr_id = post["wr_id"]
             print(f"  ✓ 게시글 생성 OK: wr_id={wr_id}")
             print(f"  → 게시판 URL: {post.get('url')}")
+            c.update_post(wr_id, subject="[연결 테스트] 수정 확인", content="게시글 수정 API 확인.")
+            print(f"  ✓ 게시글 수정 OK")
+            comment = c.create_comment(wr_id, "댓글 생성 API 확인.")
+            comment_id = comment["comment_id"]
+            print(f"  ✓ 댓글 생성 OK: comment_id={comment_id}")
+            c.update_comment(comment_id, content="댓글 수정 API 확인.", author_name="회의_점검")
+            print(f"  ✓ 댓글 수정 OK")
+            comments = c.list_comments(wr_id)
+            print(f"  ✓ 댓글 목록 OK: {len(comments)}건")
         except Exception as e:
-            print(f"  ✗ 게시글 생성 실패: {e}")
+            print(f"  ✗ 쓰기 API 실패: {e}")
             fail += 1
+        finally:
+            if wr_id:
+                try:
+                    c.delete_post(wr_id)
+                    print(f"  ✓ 테스트 게시글 삭제 OK")
+                except Exception as e:
+                    print(f"  ⚠️ 테스트 게시글 자동 삭제 실패: wr_id={wr_id}, {e}")
+                    fail += 1
 
     print(f"\n{'='*60}")
     if fail == 0:
