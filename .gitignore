@@ -25,3 +25,15 @@ data/**
 # 임시
 *.tmp
 *.log
+
+# 빌드 산출물
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# PHP 운영 토큰 (절대 commit 금지)
+g5_metting_api/plugin/metting_api/config.local.php

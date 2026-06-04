@@ -1,0 +1,24 @@
+<?php
+/**
+ * 운영 환경 토큰/설정 오버라이드.
+ *
+ * 이 파일을 config.local.php 로 복사한 뒤 값을 채워 사용.
+ * config.php가 이 파일을 먼저 로드하므로 여기서 정의한 값이 적용된다.
+ *
+ * - config.local.php 는 절대 git에 올리지 말 것 (.gitignore에 등록).
+ * - 강력한 랜덤 토큰 생성 (PHP CLI):
+ *     php -r "echo bin2hex(random_bytes(24)) . PHP_EOL;"
+ */
+
+// 강력한 API 토큰으로 교체 (Python .env의 G5_API_TOKEN과 같은 값으로 맞춤)
+define('METTING_API_TOKEN', '여기에-강력한-랜덤-토큰-48자-이상');
+
+// 운영 환경에서는 false 권장 (에러 메시지가 외부에 노출되지 않도록)
+define('METTING_API_DEBUG', false);
+
+// 게시판 코드 변경 (기본 'metting')
+// define('METTING_BO_TABLE', 'metting');
+
+// 회원으로 작성하려면 mb_id 지정 (운영 환경 권장)
+// define('METTING_MB_ID', 'admin');
+// define('METTING_WR_NAME', '회의록 자동 등록');

@@ -1,8 +1,48 @@
 # 회의록 자동 기록 시스템 (metting_record)
 
+[![Release](https://img.shields.io/github/v/release/thisgun/metting_record?style=flat)](https://github.com/thisgun/metting_record/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
+
 핸드폰으로 녹음한 회의 음성 파일을 업로드하면, AI가 자동으로 화자를 구분하고 텍스트로 변환한 뒤 요약해서 게시판에 등록해주는 도구입니다.
 
-> **⚠️ 안내:** "metting"은 "meeting"의 오타가 아니라 사용자가 지정한 정식 명칭입니다. 코드 전반에서 일관되게 사용됩니다.
+**모든 처리는 로컬 PC에서 일어납니다** — 음성/텍스트가 외부 클라우드로 나가지 않고, 비용도 0원.
+
+> **⚠️ 안내:** "metting"은 "meeting"의 오타가 아니라 정식 명칭입니다. 코드 전반에서 일관되게 사용됩니다.
+
+## 빠른 시작
+
+### 1. Python 파이프라인 (회의 처리)
+
+```bash
+git clone https://github.com/thisgun/metting_record.git
+cd metting_record
+pip install -r requirements.txt
+python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)
+cp .env.example .env                   # 환경 변수 채우기
+python doctor.py                       # 시스템 진단
+python main.py "회의.mp3"               # 회의 처리
+```
+
+### 2. 그누보드5 PHP 플러그인 (게시판 자동 등록)
+
+[Releases 페이지](https://github.com/thisgun/metting_record/releases/latest)에서 `g5_metting_api-vX.Y.Z.zip` 다운로드 → 압축 풀어서 안의 `plugin/metting_api/` 폴더를 그누보드5의 `plugin/` 안에 FTP 업로드. 자세한 절차는 아래 [그누보드5 plugin 표준 배치](#그누보드5-plugin-표준-배치) 섹션.
+
+### 3. 웹 UI (선택)
+
+```bash
+python -m streamlit run app.py
+```
+브라우저에서 `http://localhost:8501` — 회의 목록/검색/비교/편집/Export 모두 GUI.
+
+## 필수 외부 의존성
+
+- **Python 3.10+** ([python.org](https://python.org))
+- **ffmpeg** (`winget install Gyan.FFmpeg`)
+- **Ollama** + 모델 (예: `ollama pull gemma4:e2b`)
+- **그누보드5 + XAMPP/cafe24** (로컬 또는 원격 호스팅)
+
+`python doctor.py` 로 모든 의존성을 한 번에 점검 가능.
 
 ---
 

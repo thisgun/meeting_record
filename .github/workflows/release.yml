@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'         # v0.1.0, v1.2.3 등 푸시 시 트리거
+  workflow_dispatch:  # 수동 실행도 허용
+
+permissions:
+  contents: write    # Release 생성 권한
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 버전 추출 (태그에서)
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="dev-$(date +%Y%m%d-%H%M%S)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+
+      - name: PHP 패키지 ZIP 빌드 (g5_metting_api)
+        run: |
+          mkdir -p dist
+          VERSION="${{ steps.version.outputs.version }}"
+          ZIP_NAME="g5_metting_api-${VERSION}.zip"
+          # plugin/metting_api 구조 그대로 ZIP에 담음
+          # README.md 도 함께 (사용자가 ZIP 풀자마자 가이드 확인 가능)
+          cd g5_metting_api
+          zip -r "../dist/${ZIP_NAME}" plugin/ README.md
+          cd ..
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+          ls -lh dist/
+
+      - name: SHA256 체크섬 생성
+        run: |
+          cd dist
+          sha256sum "${ZIP_NAME}" > "${ZIP_NAME}.sha256"
+          cat "${ZIP_NAME}.sha256"
+
+      - name: Python 소스 배포본 ZIP 빌드 (참고용)
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SRC_ZIP="metting_record-${VERSION}-source.zip"
+          # 빌드 산출물/모델 제외
+          zip -r "dist/${SRC_ZIP}" \
+            . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "data/*" \
+            -x "__pycache__/*" \
+            -x "**/__pycache__/*" \
+            -x "*.pyc" \
+            -x ".env" \
+            -x "dist/*" \
+            -x "g5_metting_api/plugin/metting_api/config.local.php"
+          echo "SRC_ZIP=${SRC_ZIP}" >> "$GITHUB_ENV"
+          ls -lh dist/
+
+      - name: 릴리스 노트 생성
+        id: notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          {
+            echo "## 회의록 자동 생성 시스템 ${VERSION}"
+            echo ""
+            echo "### 설치 방법"
+            echo ""
+            echo "**Python 파이프라인** (회의록 처리 본체):"
+            echo '```bash'
+            echo "git clone https://github.com/${{ github.repository }}.git"
+            echo "cd metting_record"
+            echo "pip install -r requirements.txt"
+            echo "python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)"
+            echo "cp .env.example .env                   # 환경 변수 채우기"
+            echo "python doctor.py                       # 시스템 진단"
+            echo '```'
+            echo ""
+            echo "**그누보드5 PHP 플러그인** (게시판 자동 등록):"
+            echo "1. 아래 \`${ZIP_NAME}\` 다운로드"
+            echo "2. 압축 풀면 \`plugin/metting_api/\` 폴더가 들어있음"
+            echo "3. 그 폴더를 그누보드5의 \`plugin/\` 안에 FTP 업로드"
+            echo "4. \`config.local.php.example\` → \`config.local.php\` 복사 후 토큰 설정"
+            echo "5. \`https://YOUR-DOMAIN/<gnuboard폴더>/plugin/metting_api/setup_board.php?token=YOUR_TOKEN\` 1회 호출"
+            echo "6. \`setup_board.php\` 삭제"
+            echo ""
+            echo "### 파일 무결성 확인"
+            echo '```'
+            cat "dist/${ZIP_NAME}.sha256"
+            echo '```'
+            echo ""
+            echo "### 변경 이력"
+            echo ""
+            echo "전체 변경 사항은 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) 참고."
+          } > release_notes.md
+          cat release_notes.md
+
+      - name: GitHub Release 생성 + 자산 업로드
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, 'rc') || contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'alpha') }}
+          files: |
+            dist/g5_metting_api-${{ steps.version.outputs.version }}.zip
+            dist/g5_metting_api-${{ steps.version.outputs.version }}.zip.sha256
+            dist/metting_record-${{ steps.version.outputs.version }}-source.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
