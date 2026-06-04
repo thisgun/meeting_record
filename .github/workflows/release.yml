@@ -27,14 +27,14 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}"
 
-      - name: PHP 패키지 ZIP 빌드 (g5_metting_api)
+      - name: PHP 패키지 ZIP 빌드 (g5_meeting_api)
         run: |
           mkdir -p dist
           VERSION="${{ steps.version.outputs.version }}"
-          ZIP_NAME="g5_metting_api-${VERSION}.zip"
-          # plugin/metting_api 구조 그대로 ZIP에 담음
+          ZIP_NAME="g5_meeting_api-${VERSION}.zip"
+          # plugin/meeting_api 구조 그대로 ZIP에 담음
           # README.md 도 함께 (사용자가 ZIP 풀자마자 가이드 확인 가능)
-          cd g5_metting_api
+          cd g5_meeting_api
           zip -r "../dist/${ZIP_NAME}" plugin/ README.md
           cd ..
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
@@ -61,7 +61,7 @@ jobs:
             -x "*.pyc" \
             -x ".env" \
             -x "dist/*" \
-            -x "g5_metting_api/plugin/metting_api/config.local.php"
+            -x "g5_meeting_api/plugin/meeting_api/config.local.php"
           echo "SRC_ZIP=${SRC_ZIP}" >> "$GITHUB_ENV"
           ls -lh dist/
 
@@ -86,10 +86,10 @@ jobs:
             echo ""
             echo "**그누보드5 PHP 플러그인** (게시판 자동 등록):"
             echo "1. 아래 \`${ZIP_NAME}\` 다운로드"
-            echo "2. 압축 풀면 \`plugin/metting_api/\` 폴더가 들어있음"
+            echo "2. 압축 풀면 \`plugin/meeting_api/\` 폴더가 들어있음"
             echo "3. 그 폴더를 그누보드5의 \`plugin/\` 안에 FTP 업로드"
             echo "4. \`config.local.php.example\` → \`config.local.php\` 복사 후 토큰 설정"
-            echo "5. \`https://YOUR-DOMAIN/<gnuboard폴더>/plugin/metting_api/setup_board.php?token=YOUR_TOKEN\` 1회 호출"
+            echo "5. \`https://YOUR-DOMAIN/<gnuboard폴더>/plugin/meeting_api/setup_board.php?token=YOUR_TOKEN\` 1회 호출"
             echo "6. \`setup_board.php\` 삭제"
             echo ""
             echo "### 파일 무결성 확인"
@@ -111,8 +111,8 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, 'rc') || contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'alpha') }}
           files: |
-            dist/g5_metting_api-${{ steps.version.outputs.version }}.zip
-            dist/g5_metting_api-${{ steps.version.outputs.version }}.zip.sha256
+            dist/g5_meeting_api-${{ steps.version.outputs.version }}.zip
+            dist/g5_meeting_api-${{ steps.version.outputs.version }}.zip.sha256
             dist/metting_record-${{ steps.version.outputs.version }}-source.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
