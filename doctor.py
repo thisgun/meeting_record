@@ -223,6 +223,29 @@ def check_keyword_extractor():
         warn("keyword extractor 확인 실패", str(e))
 
 
+def check_sqlite_search():
+    section("SQLite 검색")
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from config import load_config
+        from src import storage
+        cfg = load_config()
+        info = storage.get_fts_info(cfg.db_path)
+        tokenizer = info.get("tokenizer")
+        detail = f"SQLite {info.get('sqlite_version')}"
+        if tokenizer == "trigram":
+            ok("FTS5 tokenizer = trigram", detail)
+        elif tokenizer == "unicode61":
+            warn(
+                "FTS5 tokenizer = unicode61",
+                detail + " — trigram 미지원 환경이라 한국어 부분 검색 품질이 낮을 수 있습니다.",
+            )
+        else:
+            warn(f"FTS5 tokenizer = {tokenizer}", detail)
+    except Exception as e:
+        warn("SQLite FTS 확인 실패", str(e)[:160])
+
+
 def check_notifier():
     section("알림 설정")
     try:
@@ -322,6 +345,7 @@ def main() -> int:
     check_g5_targets()
     check_streamlit()
     check_keyword_extractor()
+    check_sqlite_search()
     check_notifier()
     check_config()
     print()

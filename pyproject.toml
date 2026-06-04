@@ -55,6 +55,7 @@ meeting-watch = "meeting_record.cli:watch"
 
 [project.optional-dependencies]
 korean-nlp = ["kiwipiepy>=0.20.0"]
+dev = ["pytest>=8.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/thisgun/meeting_record"

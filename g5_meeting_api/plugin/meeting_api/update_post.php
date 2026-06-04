@@ -20,6 +20,7 @@ if ($m_wr_id <= 0) api_error(400, 'wr_id (int, > 0) is required');
 if (!$has_subject && !$has_content) api_error(400, 'subject or content is required');
 if ($has_subject && $m_subject === '') api_error(400, 'subject must not be empty');
 if ($has_content && $m_content === '') api_error(400, 'content must not be empty');
+if ($has_content) meeting_require_max_bytes('content', $m_content, meeting_API_MAX_POST_CONTENT_BYTES);
 
 require_once __DIR__ . '/_load_gnuboard5.php';
 
@@ -41,7 +42,10 @@ if ($has_content) {
 }
 $sets[] = "wr_last = '" . meeting_sql_escape(G5_TIME_YMDHIS) . "'";
 
-sql_query("UPDATE $write_table_sql SET " . implode(', ', $sets) . " WHERE wr_id = '$m_wr_id'");
+meeting_sql_query_or_error(
+    "UPDATE $write_table_sql SET " . implode(', ', $sets) . " WHERE wr_id = '$m_wr_id'",
+    'Failed to update post'
+);
 
 api_ok([
     'wr_id' => $m_wr_id,

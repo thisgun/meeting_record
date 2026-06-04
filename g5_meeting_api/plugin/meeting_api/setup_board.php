@@ -11,11 +11,19 @@
  * 3. g5_write_meeting 테이블 생성 (g5_write_free 복제)
  * 4. 이미 있으면 그대로 둠 (idempotent)
  *
- * 보안: 인증 토큰 일치할 때만 동작. 작업 끝나면 이 파일 삭제 권장.
+ * 보안: 인증 토큰 일치 + meeting_API_ALLOW_SETUP=true 일 때만 동작.
+ *       작업 끝나면 false로 되돌리거나 이 파일 삭제 권장.
  */
 require_once __DIR__ . '/_bootstrap.php';
 require_method('POST');
 require_auth();
+
+if (!defined('meeting_API_ALLOW_SETUP') || !meeting_API_ALLOW_SETUP) {
+    api_error(
+        403,
+        'setup_board.php is disabled. Set meeting_API_ALLOW_SETUP=true in config.local.php only during initial setup.'
+    );
+}
 
 require_once __DIR__ . '/_load_gnuboard5.php';
 global $g5;
@@ -48,12 +56,12 @@ if (!$existing) {
     $template_bo_esc = meeting_sql_escape($template_bo);
 
     // 임시 변수에 복사 후 bo_table만 변경해서 INSERT
-    sql_query("SET SESSION sql_mode = ''");
-    sql_query("CREATE TEMPORARY TABLE $tmp_table_sql LIKE $board_table_sql");
-    sql_query("INSERT INTO $tmp_table_sql SELECT * FROM $board_table_sql WHERE bo_table = '$template_bo_esc'");
-    sql_query("UPDATE $tmp_table_sql SET bo_table = '$bo_table_esc', bo_subject = '회의록', bo_count_write = 0, bo_count_comment = 0");
-    sql_query("INSERT INTO $board_table_sql SELECT * FROM $tmp_table_sql");
-    sql_query("DROP TEMPORARY TABLE $tmp_table_sql");
+    meeting_sql_query_or_error("SET SESSION sql_mode = ''", 'Failed to set SQL mode');
+    meeting_sql_query_or_error("CREATE TEMPORARY TABLE $tmp_table_sql LIKE $board_table_sql", 'Failed to create temporary board table');
+    meeting_sql_query_or_error("INSERT INTO $tmp_table_sql SELECT * FROM $board_table_sql WHERE bo_table = '$template_bo_esc'", 'Failed to copy board template');
+    meeting_sql_query_or_error("UPDATE $tmp_table_sql SET bo_table = '$bo_table_esc', bo_subject = '회의록', bo_count_write = 0, bo_count_comment = 0", 'Failed to prepare board template');
+    meeting_sql_query_or_error("INSERT INTO $board_table_sql SELECT * FROM $tmp_table_sql", 'Failed to create board');
+    meeting_sql_query_or_error("DROP TEMPORARY TABLE $tmp_table_sql", 'Failed to drop temporary board table');
     $report['board_created'] = true;
     $report['copied_from'] = $template_bo;
 } else {
@@ -69,7 +77,7 @@ $report['write_table'] = $write_table;
 $report['write_table_existed'] = (bool)$tbl_check;
 if (!$tbl_check) {
     // 'free' write 테이블 또는 임의의 기존 write 테이블을 LIKE
-    sql_query("SET SESSION sql_mode = ''");
+    meeting_sql_query_or_error("SET SESSION sql_mode = ''", 'Failed to set SQL mode');
     $tpl_write = $g5['write_prefix'] . 'free';
     $tpl_write_esc = meeting_sql_escape($tpl_write);
     $exists = sql_fetch("SHOW TABLES LIKE '$tpl_write_esc'");
@@ -84,7 +92,7 @@ if (!$tbl_check) {
         }
     }
     $tpl_write_sql = meeting_sql_identifier($tpl_write);
-    sql_query("CREATE TABLE $write_table_sql LIKE $tpl_write_sql");
+    meeting_sql_query_or_error("CREATE TABLE $write_table_sql LIKE $tpl_write_sql", 'Failed to create write table');
     $report['write_table_created'] = true;
     $report['copied_from_table'] = $tpl_write;
 }
@@ -94,7 +102,7 @@ api_ok([
     'next_steps' => [
         '1. config.local.php 의 meeting_API_TOKEN 이 강력한 값인지 확인',
         '2. config.local.php 의 meeting_API_DEBUG = false 확인',
-        '3. setup_board.php 파일 삭제 (보안)',
+        '3. config.local.php 의 meeting_API_ALLOW_SETUP 을 false로 되돌리거나 setup_board.php 파일 삭제',
         '4. Python .env 의 G5_API_BASE, G5_API_TOKEN 을 원격으로 설정',
         '5. python doctor.py 로 원격 health 확인',
     ],

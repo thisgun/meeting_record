@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import os
+import re
 import time
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -69,6 +71,36 @@ def legacy_default_target_name(clients: list["G5MeetingApiClient"]) -> str | Non
 
 class G5ApiError(RuntimeError):
     pass
+
+
+def _remote_debug_enabled() -> bool:
+    return (os.getenv("G5_DEBUG_HTTP") or "").lower().strip() in ("1", "true", "yes", "on")
+
+
+def _compact_remote_text(value: object, *, limit: int = 240) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+def _remote_error_message(url: str, status_code: int, *, data: object | None = None, text: str = "") -> str:
+    detail = ""
+    if isinstance(data, dict):
+        detail = str(data.get("error") or data.get("message") or "")
+    elif data is not None:
+        detail = str(data)
+    if not detail and _remote_debug_enabled() and text:
+        detail = text
+    detail = _compact_remote_text(detail or "remote request failed")
+    return f"{url} HTTP {status_code}: {detail}"
+
+
+def _non_json_message(url: str, status_code: int, body: str) -> str:
+    suffix = ""
+    if _remote_debug_enabled():
+        suffix = f": {_compact_remote_text(body)}"
+    return f"Non-JSON response from {url} (HTTP {status_code}, {len(body.encode('utf-8'))} bytes){suffix}"
 
 
 class G5ClientBase(ABC):
@@ -156,11 +188,9 @@ class G5MeetingApiClient(G5ClientBase):
                 try:
                     data = r.json()
                 except ValueError:
-                    raise G5ApiError(f"Non-JSON response from {url}: {r.text[:500]}")
+                    raise G5ApiError(_non_json_message(url, r.status_code, r.text))
                 if r.status_code >= 400 or not data.get("ok"):
-                    raise G5ApiError(
-                        f"{url} → HTTP {r.status_code}: {data.get('error') or data}"
-                    )
+                    raise G5ApiError(_remote_error_message(url, r.status_code, data=data, text=r.text))
                 return data
             except (requests.RequestException, G5ApiError) as e:
                 last_err = e
@@ -176,9 +206,9 @@ class G5MeetingApiClient(G5ClientBase):
         try:
             data = r.json()
         except ValueError:
-            raise G5ApiError(f"Non-JSON response from {url}: {r.text[:500]}")
+            raise G5ApiError(_non_json_message(url, r.status_code, r.text))
         if r.status_code >= 400 or not data.get("ok"):
-            raise G5ApiError(f"{url} → HTTP {r.status_code}: {data}")
+            raise G5ApiError(_remote_error_message(url, r.status_code, data=data, text=r.text))
         return data
 
     def health(self) -> dict:

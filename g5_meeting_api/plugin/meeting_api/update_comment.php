@@ -20,6 +20,7 @@ if ($m_comment_id <= 0) api_error(400, 'comment_id (int, > 0) is required');
 if (!$has_content && !$has_author) api_error(400, 'content or author_name is required');
 if ($has_content && $m_content === '') api_error(400, 'content must not be empty');
 if ($has_author && $m_author_name === '') api_error(400, 'author_name must not be empty');
+if ($has_content) meeting_require_max_bytes('content', $m_content, meeting_API_MAX_COMMENT_CONTENT_BYTES);
 
 require_once __DIR__ . '/_load_gnuboard5.php';
 
@@ -43,13 +44,20 @@ if ($has_author) {
     $sets[] = "wr_name = '" . meeting_sql_escape(mb_substr($m_author_name, 0, 50, 'UTF-8')) . "'";
 }
 
-sql_query("UPDATE $write_table_sql SET " . implode(', ', $sets) . " WHERE wr_id = '$m_comment_id'");
-
+meeting_db_begin();
+meeting_sql_query_or_error(
+    "UPDATE $write_table_sql SET " . implode(', ', $sets) . " WHERE wr_id = '$m_comment_id'",
+    'Failed to update comment'
+);
 if ($has_content) {
     $parent_id = (int)$comment['wr_parent'];
     $now = meeting_sql_escape(G5_TIME_YMDHIS);
-    sql_query("UPDATE $write_table_sql SET wr_last = '$now' WHERE wr_id = '$parent_id'");
+    meeting_sql_query_or_error(
+        "UPDATE $write_table_sql SET wr_last = '$now' WHERE wr_id = '$parent_id'",
+        'Failed to update parent post timestamp'
+    );
 }
+meeting_db_commit();
 
 api_ok([
     'comment_id' => $m_comment_id,

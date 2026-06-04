@@ -20,6 +20,9 @@ define('meeting_API_DEBUG', false);
 // 게시판 코드 변경 (기본 'meeting')
 // define('meeting_BO_TABLE', 'meeting');
 
+// setup_board.php를 실행할 때만 true로 바꾸고, 실행 후 false로 되돌리거나 파일을 삭제하세요.
+// define('meeting_API_ALLOW_SETUP', true);
+
 // 회원으로 작성하려면 mb_id 지정 (운영 환경 권장)
 // define('meeting_MB_ID', 'admin');
 // define('meeting_WR_NAME', '회의록 자동 등록');
@@ -27,3 +30,9 @@ define('meeting_API_DEBUG', false);
 // 기존 버전에서 생성된 marker 없는 글을 임시로 수정/삭제해야 할 때만 true.
 // 작업 후 false로 되돌리는 것을 권장.
 // define('meeting_API_ALLOW_UNMARKED_WRITES', true);
+
+// 요청/본문 크기 제한. 너무 큰 요청으로 서버가 과부하되는 것을 막는다.
+// 기본값: 전체 JSON 3 MiB, 게시글 본문 2 MiB, 댓글 본문 256 KiB.
+// define('meeting_API_MAX_BODY_BYTES', 3145728);
+// define('meeting_API_MAX_POST_CONTENT_BYTES', 2097152);
+// define('meeting_API_MAX_COMMENT_CONTENT_BYTES', 262144);

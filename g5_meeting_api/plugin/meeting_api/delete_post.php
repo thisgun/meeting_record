@@ -31,12 +31,22 @@ meeting_require_api_owned_marker($post['wr_10'] ?? '');
 $row = sql_fetch("SELECT COUNT(*) AS cnt FROM $write_table_sql WHERE wr_parent = '$m_wr_id' AND wr_is_comment = 1");
 $comment_count = (int)($row['cnt'] ?? 0);
 
-sql_query("DELETE FROM $write_table_sql WHERE wr_parent = '$m_wr_id'");
-sql_query("DELETE FROM $board_new_table_sql WHERE bo_table = '$bo_table_esc' AND wr_parent = '$m_wr_id'");
-sql_query("UPDATE $board_table_sql
+meeting_db_begin();
+meeting_sql_query_or_error(
+    "DELETE FROM $write_table_sql WHERE wr_parent = '$m_wr_id'",
+    'Failed to delete post rows'
+);
+meeting_sql_query_or_error(
+    "DELETE FROM $board_new_table_sql WHERE bo_table = '$bo_table_esc' AND wr_parent = '$m_wr_id'",
+    'Failed to delete board_new rows'
+);
+meeting_sql_query_or_error("UPDATE $board_table_sql
     SET bo_count_write = GREATEST(bo_count_write - 1, 0),
         bo_count_comment = GREATEST(bo_count_comment - $comment_count, 0)
-    WHERE bo_table = '$bo_table_esc'");
+    WHERE bo_table = '$bo_table_esc'",
+    'Failed to update board counts'
+);
+meeting_db_commit();
 
 api_ok([
     'wr_id' => $m_wr_id,

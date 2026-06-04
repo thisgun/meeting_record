@@ -36,6 +36,7 @@ function api_ok($data = []) {
 }
 
 function api_error($status_code, $message, $extra = []) {
+    meeting_db_rollback_if_open();
     api_respond($status_code, array_merge([
         'ok' => false,
         'error' => $message,
@@ -85,11 +86,25 @@ function require_auth() {
 function read_json_body() {
     $raw = file_get_contents('php://input');
     if ($raw === '' || $raw === false) return [];
+    $max_bytes = (int)meeting_API_MAX_BODY_BYTES;
+    if ($max_bytes > 0 && strlen($raw) > $max_bytes) {
+        api_error(413, 'JSON body is too large', ['max_bytes' => $max_bytes]);
+    }
     $data = json_decode($raw, true);
     if (json_last_error() !== JSON_ERROR_NONE) {
         api_error(400, 'Invalid JSON body: ' . json_last_error_msg());
     }
     return is_array($data) ? $data : [];
+}
+
+function meeting_require_max_bytes($field, $value, $max_bytes) {
+    $max_bytes = (int)$max_bytes;
+    if ($max_bytes > 0 && strlen((string)$value) > $max_bytes) {
+        api_error(413, "$field is too large", [
+            'field' => $field,
+            'max_bytes' => $max_bytes,
+        ]);
+    }
 }
 
 /**
@@ -177,4 +192,35 @@ function meeting_normalize_idempotency_key($value) {
         api_error(400, 'idempotency_key may contain only letters, numbers, dot, colon, underscore, and hyphen');
     }
     return $key;
+}
+
+function meeting_db_rollback_if_open() {
+    if (!empty($GLOBALS['meeting_api_transaction_open'])) {
+        @sql_query('ROLLBACK', false);
+        $GLOBALS['meeting_api_transaction_open'] = false;
+    }
+}
+
+function meeting_sql_query_or_error($sql, $message = 'Database query failed') {
+    $result = sql_query($sql, false);
+    if (!$result) {
+        $extra = [];
+        if (defined('meeting_API_DEBUG') && meeting_API_DEBUG && function_exists('sql_error')) {
+            $extra['detail'] = sql_error();
+        }
+        api_error(500, $message, $extra);
+    }
+    return $result;
+}
+
+function meeting_db_begin() {
+    meeting_sql_query_or_error('START TRANSACTION', 'Failed to start database transaction');
+    $GLOBALS['meeting_api_transaction_open'] = true;
+}
+
+function meeting_db_commit() {
+    if (!empty($GLOBALS['meeting_api_transaction_open'])) {
+        meeting_sql_query_or_error('COMMIT', 'Failed to commit database transaction');
+        $GLOBALS['meeting_api_transaction_open'] = false;
+    }
 }

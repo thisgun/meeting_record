@@ -24,6 +24,7 @@ $m_idempotency_key = meeting_normalize_idempotency_key($m_body['idempotency_key'
 
 if ($m_wr_id <= 0) api_error(400, 'wr_id (int, > 0) is required');
 if ($m_content === '') api_error(400, 'content is required');
+meeting_require_max_bytes('content', $m_content, meeting_API_MAX_COMMENT_CONTENT_BYTES);
 
 require_once __DIR__ . '/_load_gnuboard5.php';
 
@@ -33,17 +34,14 @@ $write_table_sql = meeting_sql_identifier($write_table);
 $board_new_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_new_table']);
 $board_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_table']);
 
+meeting_db_begin();
 $parent = sql_fetch("SELECT wr_id, wr_num, ca_name, wr_10 FROM $write_table_sql
-    WHERE wr_id = '$m_wr_id' AND wr_is_comment = 0");
+    WHERE wr_id = '$m_wr_id' AND wr_is_comment = 0
+    FOR UPDATE");
 if (!$parent) {
     api_error(404, "Parent post not found: wr_id=$m_wr_id");
 }
 meeting_require_api_owned_marker($parent['wr_10'] ?? '');
-
-$row = sql_fetch("SELECT MAX(wr_comment) AS max_comment
-    FROM $write_table_sql
-    WHERE wr_parent = '$m_wr_id' AND wr_is_comment = 1");
-$tmp_comment = (int)($row['max_comment'] ?? 0) + 1;
 
 $wr_content = meeting_sql_escape($m_content);
 // 화자별 작성자명: 요청에 author_name 있으면 사용, 없으면 기본값
@@ -70,6 +68,7 @@ if ($m_idempotency_key !== '') {
         ORDER BY wr_id ASC
         LIMIT 1");
     if ($existing && (int)$existing['wr_id'] > 0) {
+        meeting_db_commit();
         api_ok([
             'comment_id' => (int)$existing['wr_id'],
             'wr_id' => $m_wr_id,
@@ -78,6 +77,11 @@ if ($m_idempotency_key !== '') {
         ]);
     }
 }
+
+$row = sql_fetch("SELECT MAX(wr_comment) AS max_comment
+    FROM $write_table_sql
+    WHERE wr_parent = '$m_wr_id' AND wr_is_comment = 1");
+$tmp_comment = (int)($row['max_comment'] ?? 0) + 1;
 
 $sql = "INSERT INTO $write_table_sql SET
     ca_name = '$ca_name',
@@ -101,23 +105,30 @@ $sql = "INSERT INTO $write_table_sql SET
     wr_1 = '', wr_2 = '', wr_3 = '', wr_4 = '', wr_5 = '',
     wr_6 = '', wr_7 = '', wr_8 = '', wr_9 = '$idempotency_key', wr_10 = '$api_marker'";
 
-sql_query($sql);
+meeting_sql_query_or_error($sql, 'Failed to insert comment');
 $new_comment_id = sql_insert_id();
 if (!$new_comment_id) {
     api_error(500, 'Failed to insert comment');
 }
 
-sql_query("UPDATE $write_table_sql
+meeting_sql_query_or_error("UPDATE $write_table_sql
     SET wr_comment = wr_comment + 1, wr_last = '$now'
-    WHERE wr_id = '$m_wr_id'");
+    WHERE wr_id = '$m_wr_id'",
+    'Failed to update parent comment count'
+);
 
-sql_query("INSERT INTO $board_new_table_sql
+meeting_sql_query_or_error("INSERT INTO $board_new_table_sql
     (bo_table, wr_id, wr_parent, bn_datetime, mb_id)
-    VALUES ('$bo_table_esc', '$new_comment_id', '$m_wr_id', '$now', '$mb_id_esc')");
+    VALUES ('$bo_table_esc', '$new_comment_id', '$m_wr_id', '$now', '$mb_id_esc')",
+    'Failed to insert board_new record'
+);
 
-sql_query("UPDATE $board_table_sql
+meeting_sql_query_or_error("UPDATE $board_table_sql
     SET bo_count_comment = bo_count_comment + 1
-    WHERE bo_table = '$bo_table_esc'");
+    WHERE bo_table = '$bo_table_esc'",
+    'Failed to update board comment count'
+);
+meeting_db_commit();
 
 api_ok([
     'comment_id' => (int)$new_comment_id,

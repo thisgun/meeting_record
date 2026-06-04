@@ -33,6 +33,7 @@ $m_idempotency_key = meeting_normalize_idempotency_key($m_body['idempotency_key'
 
 if ($m_subject === '') api_error(400, 'subject is required');
 if ($m_content === '') api_error(400, 'content is required');
+meeting_require_max_bytes('content', $m_content, meeting_API_MAX_POST_CONTENT_BYTES);
 
 require_once __DIR__ . '/_load_gnuboard5.php';
 
@@ -97,21 +98,30 @@ $sql = "INSERT INTO $write_table_sql SET
     wr_1 = '', wr_2 = '', wr_3 = '', wr_4 = '', wr_5 = '',
     wr_6 = '', wr_7 = '', wr_8 = '', wr_9 = '$idempotency_key', wr_10 = '$api_marker'";
 
-sql_query($sql);
+meeting_db_begin();
+meeting_sql_query_or_error($sql, 'Failed to insert post');
 $new_wr_id = sql_insert_id();
 if (!$new_wr_id) {
     api_error(500, 'Failed to insert post (sql_insert_id returned 0)');
 }
 
-sql_query("UPDATE $write_table_sql SET wr_parent = '$new_wr_id' WHERE wr_id = '$new_wr_id'");
+meeting_sql_query_or_error(
+    "UPDATE $write_table_sql SET wr_parent = '$new_wr_id' WHERE wr_id = '$new_wr_id'",
+    'Failed to update post parent'
+);
 
-sql_query("INSERT INTO $board_new_table_sql
+meeting_sql_query_or_error("INSERT INTO $board_new_table_sql
     (bo_table, wr_id, wr_parent, bn_datetime, mb_id)
-    VALUES ('$bo_table_esc', '$new_wr_id', '$new_wr_id', '$now', '$mb_id_esc')");
+    VALUES ('$bo_table_esc', '$new_wr_id', '$new_wr_id', '$now', '$mb_id_esc')",
+    'Failed to insert board_new record'
+);
 
-sql_query("UPDATE $board_table_sql
+meeting_sql_query_or_error("UPDATE $board_table_sql
     SET bo_count_write = bo_count_write + 1
-    WHERE bo_table = '$bo_table_esc'");
+    WHERE bo_table = '$bo_table_esc'",
+    'Failed to update board write count'
+);
+meeting_db_commit();
 
 api_ok([
     'wr_id' => (int)$new_wr_id,

@@ -30,7 +30,7 @@ jobs:
       - name: 패키징 스모크 검사
         run: |
           python -m pip install --upgrade pip
-          python -m pip install python-dotenv requests
+          python -m pip install python-dotenv requests pytest
           python -m pip install -e . --no-deps
           python - <<'PY'
           from importlib.metadata import entry_points
@@ -56,37 +56,8 @@ jobs:
       - name: Python 문법 검사
         run: python -m compileall -q .
 
-      - name: PII 마스킹 샘플 테스트
-        run: python scripts/test_pii.py
-
-      - name: SQLite 저장소 스모크 테스트
-        run: |
-          python - <<'PY'
-          import tempfile
-          from pathlib import Path
-          from src import storage
-
-          db_path = Path(tempfile.mkdtemp()) / "meetings.db"
-          meeting_id = storage.save_meeting(
-              db_path,
-              source_file="sample.mp3",
-              title="샘플 회의",
-              summary_md="## 요약\n- 테스트",
-              duration_sec=12.3,
-              utterances=[
-                  {"speaker": "SPEAKER_00", "start": 0, "end": 2, "text": "안녕하세요"},
-                  {"speaker": "SPEAKER_01", "start": 2, "end": 5, "text": "반갑습니다"},
-              ],
-          )
-          meeting = storage.get_meeting(db_path, meeting_id)
-          assert meeting is not None
-          assert meeting["meeting"]["title"] == "샘플 회의"
-          assert len(meeting["utterances"]) == 2
-          assert storage.search_meetings(db_path, "테스트")
-          assert storage.search_utterances(db_path, "반갑습니다")
-          storage.mark_meeting_synced(db_path, meeting_id, "8", target_name="ci", primary=True)
-          assert storage.get_meeting_target(db_path, meeting_id, "ci")["sync_status"] == "synced"
-          PY
+      - name: 단위 테스트
+        run: python -m pytest -q
 
       - name: PHP 문법 검사
         run: |

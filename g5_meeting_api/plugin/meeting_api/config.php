@@ -34,6 +34,10 @@ if (!defined('meeting_WR_EMAIL')) define('meeting_WR_EMAIL', '');
 if (!defined('meeting_WR_HOMEPAGE')) define('meeting_WR_HOMEPAGE', '');
 if (!defined('meeting_API_MARKER')) define('meeting_API_MARKER', 'meeting_api');
 if (!defined('meeting_API_ALLOW_UNMARKED_WRITES')) define('meeting_API_ALLOW_UNMARKED_WRITES', false);
+if (!defined('meeting_API_ALLOW_SETUP')) define('meeting_API_ALLOW_SETUP', false);
+if (!defined('meeting_API_MAX_BODY_BYTES')) define('meeting_API_MAX_BODY_BYTES', 3145728); // 3 MiB
+if (!defined('meeting_API_MAX_POST_CONTENT_BYTES')) define('meeting_API_MAX_POST_CONTENT_BYTES', 2097152); // 2 MiB
+if (!defined('meeting_API_MAX_COMMENT_CONTENT_BYTES')) define('meeting_API_MAX_COMMENT_CONTENT_BYTES', 262144); // 256 KiB
 
 // 운영 안전을 위해 디버그는 기본 false. 필요할 때 config.local.php에서 명시적으로 true 지정.
 if (!defined('meeting_API_DEBUG')) define('meeting_API_DEBUG', false);

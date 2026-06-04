@@ -7,6 +7,7 @@
     python search.py "지게차" --utterances-only     # 발화만
     python search.py "산재" --since 2026-01-01 --until 2026-12-31
     python search.py --rebuild                      # FTS 인덱스 재구축
+    python search.py --recreate-fts --tokenizer trigram  # FTS 테이블을 trigram으로 재생성
 
 FTS5 쿼리 문법:
     "단어 OR 단어"      # OR
@@ -90,6 +91,18 @@ def cmd_rebuild(args) -> int:
     return 0
 
 
+def cmd_recreate_fts(args) -> int:
+    cfg = load_config()
+    print(f"FTS 테이블 재생성 중... tokenizer={args.tokenizer}")
+    try:
+        actual = storage.recreate_fts(cfg.db_path, tokenizer=args.tokenizer)
+    except Exception as e:
+        print(f"FTS 테이블 재생성 실패: {e}", file=sys.stderr)
+        return 2
+    print(f"✓ 완료: tokenizer={actual}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -106,12 +119,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--meetings-only", action="store_true", help="회의 요약만 검색")
     parser.add_argument("--utterances-only", action="store_true", help="발화만 검색")
     parser.add_argument("--rebuild", action="store_true", help="FTS 인덱스 재구축")
+    parser.add_argument("--recreate-fts", action="store_true", help="FTS 테이블/트리거를 삭제 후 재생성")
+    parser.add_argument("--tokenizer", choices=["auto", "trigram", "unicode61"], default="auto", help="--recreate-fts에서 사용할 tokenizer")
     parser.add_argument("--advanced", action="store_true", help="FTS5 MATCH 문법을 그대로 사용")
 
     args = parser.parse_args(argv)
 
     if args.rebuild:
         return cmd_rebuild(args)
+    if args.recreate_fts:
+        return cmd_recreate_fts(args)
     if not args.query:
         parser.print_help()
         return 1

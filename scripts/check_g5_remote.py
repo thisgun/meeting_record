@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -70,11 +71,12 @@ def main() -> int:
         # 2. 인증 동작 확인 (post + comment + update + list + delete)
         print(f"\n시도: 테스트 게시글 1건 작성 후 자동 삭제")
         wr_id = None
+        run_id = uuid.uuid4().hex[:12]
         try:
             post = c.create_post(
-                subject="[연결 테스트] 자동 삭제 예정",
-                content="g5_meeting_api 연결 점검용. 곧 자동 삭제됩니다.",
-                idempotency_key=f"meeting_record:check_g5_remote:post:{c.name}",
+                subject=f"[연결 테스트] 자동 삭제 예정 ({run_id})",
+                content=f"g5_meeting_api 연결 점검용. 곧 자동 삭제됩니다.\nrun_id={run_id}",
+                idempotency_key=f"meeting_record:check_g5_remote:post:{c.name}:{run_id}",
             )
             wr_id = post["wr_id"]
             print(f"  ✓ 게시글 생성 OK: wr_id={wr_id}")
@@ -83,8 +85,8 @@ def main() -> int:
             print(f"  ✓ 게시글 수정 OK")
             comment = c.create_comment(
                 wr_id,
-                "댓글 생성 API 확인.",
-                idempotency_key=f"meeting_record:check_g5_remote:comment:{c.name}",
+                f"댓글 생성 API 확인. run_id={run_id}",
+                idempotency_key=f"meeting_record:check_g5_remote:comment:{c.name}:{run_id}",
             )
             comment_id = comment["comment_id"]
             print(f"  ✓ 댓글 생성 OK: comment_id={comment_id}")
@@ -101,7 +103,8 @@ def main() -> int:
                     c.delete_post(wr_id)
                     print(f"  ✓ 테스트 게시글 삭제 OK")
                 except Exception as e:
-                    print(f"  ⚠️ 테스트 게시글 자동 삭제 실패: wr_id={wr_id}, {e}")
+                    print(f"  ⚠️ 테스트 게시글 자동 삭제 실패: wr_id={wr_id}, run_id={run_id}, {e}")
+                    print("     게시판에서 위 wr_id의 '[연결 테스트]' 글을 수동 삭제하세요.")
                     fail += 1
 
     print(f"\n{'='*60}")
