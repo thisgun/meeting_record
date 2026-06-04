@@ -30,6 +30,38 @@ def _print_step(n: int, total: int, msg: str) -> None:
     print(f"\n[{n}/{total}] {msg}", flush=True)
 
 
+def _release_torch_memory(label: str = "") -> None:
+    """Whisperx/pyannote가 점유한 RAM/VRAM을 적극적으로 회수.
+
+    Ollama가 같은 머신에서 모델을 로드해야 하므로 트랜스크립션 직후
+    호출. CUDA empty_cache는 PyTorch가 풀어두지 않은 캐시 영역까지 해제.
+    """
+    import gc
+
+    for _ in range(3):
+        gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
+    except ImportError:
+        pass
+
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        msg = f"    → 메모리 정리 완료 (free RAM: {vm.available/1024/1024/1024:.1f} GiB)"
+        if label:
+            msg = f"    → 메모리 정리 ({label}) — free RAM: {vm.available/1024/1024/1024:.1f} GiB"
+        print(msg, flush=True)
+    except ImportError:
+        print("    → 메모리 정리 완료", flush=True)
+
+
 def _utterance_for_comment(row: dict) -> dict:
     return {
         "speaker": row["speaker"],
@@ -229,7 +261,8 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         print(f"    → 발화 {len(segments)}건, 화자 {len({s['speaker'] for s in segments})}명 "
               f"({time.time()-t0:.1f}s, 캐시: {cache_path.name})")
 
-    # 3) 요약
+    # 3) 요약 — Ollama가 모델을 로드할 수 있도록 whisperx/pyannote 메모리 먼저 해제
+    _release_torch_memory("STT 후")
     _print_step(3, total_steps, f"회의 요약 (Ollama {cfg.ollama_model})")
     t0 = time.time()
     summary = summarizer.summarize(
