@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA = """
+BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meetings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT,
@@ -69,18 +69,21 @@ CREATE INDEX IF NOT EXISTS idx_meeting_targets_status
     ON meeting_sync_targets(target_name, sync_status);
 CREATE INDEX IF NOT EXISTS idx_utterance_targets_status
     ON utterance_sync_targets(target_name, sync_status);
+"""
 
--- FTS5 전문 검색 인덱스 (한국어 트라이그램 토크나이저)
+
+FTS_SCHEMA_TEMPLATE = """
+-- FTS5 전문 검색 인덱스 (trigram 우선, 미지원 시 unicode61 fallback)
 CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(
     title, summary_md,
     content='meetings', content_rowid='id',
-    tokenize='trigram'
+    tokenize='{tokenizer}'
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS utterances_fts USING fts5(
     text, speaker,
     content='utterances', content_rowid='id',
-    tokenize='trigram'
+    tokenize='{tokenizer}'
 );
 
 -- meetings ↔ meetings_fts 동기화 트리거
@@ -107,6 +110,26 @@ CREATE TRIGGER IF NOT EXISTS utterances_au AFTER UPDATE ON utterances BEGIN
     INSERT INTO utterances_fts(rowid, text, speaker) VALUES (new.id, new.text, new.speaker);
 END;
 """
+
+
+def _fts_schema(tokenizer: str) -> str:
+    return FTS_SCHEMA_TEMPLATE.format(tokenizer=tokenizer)
+
+
+def _ensure_fts_schema(conn: sqlite3.Connection) -> str:
+    """Create FTS5 tables, falling back when SQLite lacks the trigram tokenizer."""
+    for tokenizer in ("trigram", "unicode61"):
+        try:
+            conn.executescript(_fts_schema(tokenizer))
+            return tokenizer
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if tokenizer == "trigram" and ("tokenizer" in message or "parse error" in message):
+                conn.execute("DROP TABLE IF EXISTS meetings_fts")
+                conn.execute("DROP TABLE IF EXISTS utterances_fts")
+                continue
+            raise
+    raise sqlite3.OperationalError("Unable to create FTS5 tables")
 
 
 def rebuild_fts(db_path) -> None:
@@ -154,7 +177,8 @@ def _backfill_uuid_column(conn: sqlite3.Connection, table_name: str) -> None:
 
 def init_db(db_path: str | Path) -> None:
     with connect(db_path) as conn:
-        conn.executescript(SCHEMA)
+        conn.executescript(BASE_SCHEMA)
+        _ensure_fts_schema(conn)
         _ensure_column(conn, "meetings", "uuid", "TEXT")
         _ensure_column(conn, "utterances", "uuid", "TEXT")
         _backfill_uuid_column(conn, "meetings")

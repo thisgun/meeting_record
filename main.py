@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src import audio, cache, dictionary, notifier, pii, storage, summarizer, transcriber
 from src.g5_client import (
     G5ApiError,
@@ -555,12 +556,7 @@ def show_meeting(meeting_id: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # cp949 콘솔/리다이렉트에서도 한글·✓/✗ 등 유니코드 출력이 깨지지 않도록 UTF-8 강제
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
+    configure_utf8_stdio()
 
     parser = argparse.ArgumentParser(description="회의록 자동 기록")
     parser.add_argument("audio_file", nargs="?", help="입력 오디오 파일 (m4a/mp3/wav/amr)")

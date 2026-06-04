@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src import storage
 
 
@@ -90,6 +91,7 @@ def cmd_rebuild(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="회의록 검색 CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -82,6 +82,8 @@ jobs:
           assert meeting is not None
           assert meeting["meeting"]["title"] == "샘플 회의"
           assert len(meeting["utterances"]) == 2
+          assert storage.search_meetings(db_path, "테스트")
+          assert storage.search_utterances(db_path, "반갑습니다")
           storage.mark_meeting_synced(db_path, meeting_id, "8", target_name="ci", primary=True)
           assert storage.get_meeting_target(db_path, meeting_id, "ci")["sync_status"] == "synced"
           PY

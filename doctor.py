@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from meeting_record.console import configure_utf8_stdio
+
 
 GREEN = "\033[32m"
 YELLOW = "\033[33m"
@@ -307,12 +309,7 @@ def check_packages():
 
 
 def main() -> int:
-    # cp949 콘솔/리다이렉트에서도 ✓/✗ 등 유니코드 출력이 깨지지 않도록 UTF-8 강제
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
+    configure_utf8_stdio()
     print(f"\n{BOLD}===== meeting_record 시스템 진단 ====={RESET}")
     check_python()
     check_pytorch()

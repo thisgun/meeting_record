@@ -33,11 +33,12 @@ $write_table_sql = meeting_sql_identifier($write_table);
 $board_new_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_new_table']);
 $board_table_sql = meeting_sql_identifier($GLOBALS['g5']['board_table']);
 
-$parent = sql_fetch("SELECT wr_id, wr_num, ca_name FROM $write_table_sql
+$parent = sql_fetch("SELECT wr_id, wr_num, ca_name, wr_10 FROM $write_table_sql
     WHERE wr_id = '$m_wr_id' AND wr_is_comment = 0");
 if (!$parent) {
     api_error(404, "Parent post not found: wr_id=$m_wr_id");
 }
+meeting_require_api_owned_marker($parent['wr_10'] ?? '');
 
 $row = sql_fetch("SELECT MAX(wr_comment) AS max_comment
     FROM $write_table_sql

@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src import dictionary as d
 
 
@@ -261,6 +262,7 @@ def cmd_apply_to_meeting(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description="도메인 사전 CLI", formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 

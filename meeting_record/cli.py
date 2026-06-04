@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+from meeting_record.console import configure_utf8_stdio
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -35,6 +37,7 @@ def _load_cli_module(module_name: str) -> ModuleType:
 
 
 def _run(module_name: str) -> int:
+    configure_utf8_stdio()
     module = _load_cli_module(module_name)
     return int(module.main() or 0)
 

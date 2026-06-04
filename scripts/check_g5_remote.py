@@ -18,10 +18,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src.g5_client import build_clients_from_env
 
 
 def main() -> int:
+    configure_utf8_stdio()
     p = argparse.ArgumentParser()
     p.add_argument("--target", help="특정 타겟 이름만 점검 (예: remote)")
     args = p.parse_args()

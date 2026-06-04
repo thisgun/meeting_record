@@ -15,11 +15,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src import stats as st
 from src import storage
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     p = argparse.ArgumentParser(description="회의 통계")
     p.add_argument("meeting_id", type=int)
     p.add_argument("--time", action="store_true", help="시간 구간별 분포 표시")

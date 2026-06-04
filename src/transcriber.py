@@ -263,20 +263,20 @@ def merge_consecutive(segments: list[dict], gap_sec: float = 1.0) -> list[dict]:
 
 if __name__ == "__main__":
     import json
-    import os
     import sys
-    from dotenv import load_dotenv
 
-    load_dotenv()
+    from config import load_config
+
     if len(sys.argv) < 2:
         print("usage: python -m src.transcriber <wav_path> [num_speakers]")
         sys.exit(1)
 
+    cfg = load_config()
     n_spk = int(sys.argv[2]) if len(sys.argv) > 2 else None
     segs = transcribe_and_diarize(
         sys.argv[1],
-        hf_token=os.getenv("HUGGINGFACE_TOKEN", ""),
-        model_name=os.getenv("WHISPER_MODEL", "medium"),
+        hf_token=cfg.huggingface_token,
+        model_name=cfg.whisper_model,
         num_speakers=n_spk,
     )
     segs = merge_consecutive(remap_speakers(segs))
