@@ -103,6 +103,55 @@ def _extract_json(raw: str) -> dict:
     return {"title": title_m.group(1).strip(), "summary_md": md.strip()}
 
 
+def _stream_chat(client, *, model, messages, options, format, keep_alive):
+    """Ollama 스트리밍 1회 시도. (content, chunk_count, elapsed_sec) 반환.
+
+    스트림 도중 RemoteProtocolError 등으로 끊기면 부분 content와 함께
+    raise — 호출부에서 재시도 여부 결정.
+    """
+    import sys
+    import time as _time
+
+    response_iter = client.chat(
+        model=model,
+        messages=messages,
+        options=options,
+        format=format,
+        keep_alive=keep_alive,
+        stream=True,
+    )
+
+    parts: list[str] = []
+    chunk_count = 0
+    last_report = 0.0
+    start = _time.time()
+    try:
+        for chunk in response_iter:
+            piece = chunk.get("message", {}).get("content", "") if isinstance(chunk, dict) \
+                    else getattr(chunk, "message", None) and chunk.message.content or ""
+            if piece:
+                parts.append(piece)
+                chunk_count += 1
+                now = _time.time()
+                if now - last_report >= 3.0:
+                    elapsed = int(now - start)
+                    sys.stdout.write(f"\r    생성 중... {chunk_count}청크 ({elapsed}s 경과)")
+                    sys.stdout.flush()
+                    last_report = now
+    except Exception as e:
+        # 부분 결과를 보존하여 상위에 전달
+        elapsed = int(_time.time() - start)
+        sys.stdout.write(f"\r    스트림 중단 ({chunk_count}청크, {elapsed}s): {type(e).__name__}{' '*20}\n")
+        sys.stdout.flush()
+        e._partial_content = "".join(parts)  # type: ignore[attr-defined]
+        e._partial_chunks = chunk_count  # type: ignore[attr-defined]
+        raise
+
+    sys.stdout.write(f"\r    생성 완료 ({chunk_count}청크, {int(_time.time()-start)}s 소요){' '*20}\n")
+    sys.stdout.flush()
+    return "".join(parts), chunk_count, int(_time.time() - start)
+
+
 def summarize(
     utterances: list[dict],
     *,
@@ -110,6 +159,7 @@ def summarize(
     host: str = "http://127.0.0.1:11434",
     timeout: float = 1800.0,
     keep_alive: str = "60m",
+    max_retries: int = 2,
 ) -> dict:
     """발화 리스트를 받아 {title, summary_md} 반환."""
     try:
@@ -136,57 +186,75 @@ def summarize(
         f"--- 회의 대화 시작 ---\n{transcript}\n--- 회의 대화 끝 ---"
     )
 
-    # 스트리밍 응답 — 토큰 사이 idle만 timeout 적용되므로 전체 처리가 길어도 안 끊김
-    # 동시에 진행 상황 표시 (마지막 줄에 "생성 중... N토큰" 갱신)
-    import sys
-    response_iter = client.chat(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-        options={
-            "temperature": 0.2,
-            "num_ctx": num_ctx,
-            "num_predict": 16384,  # 풍성한 요약을 위해 응답 토큰 한도 확대
-        },
-        format="json",
-        keep_alive=keep_alive,
-        stream=True,
-    )
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
+    options = {
+        "temperature": 0.2,
+        "num_ctx": num_ctx,
+        "num_predict": 16384,
+    }
 
-    parts: list[str] = []
-    token_count = 0
-    last_report = 0.0
+    import sys
     import time as _time
-    start = _time.time()
-    for chunk in response_iter:
-        piece = chunk.get("message", {}).get("content", "") if isinstance(chunk, dict) \
-                else getattr(chunk, "message", None) and chunk.message.content or ""
-        if piece:
-            parts.append(piece)
-            token_count += 1
-            now = _time.time()
-            if now - last_report >= 3.0:
-                elapsed = int(now - start)
-                sys.stdout.write(f"\r    생성 중... {token_count}청크 ({elapsed}s 경과)")
+
+    content = ""
+    last_error: Exception | None = None
+    last_partial = ""
+    for attempt in range(1, max_retries + 1):
+        try:
+            content, _chunks, _elapsed = _stream_chat(
+                client,
+                model=model,
+                messages=messages,
+                options=options,
+                format="json",
+                keep_alive=keep_alive,
+            )
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            partial = getattr(e, "_partial_content", "") or ""
+            # 더 긴 partial을 보존
+            if len(partial) > len(last_partial):
+                last_partial = partial
+            if attempt < max_retries:
+                backoff = 3 * attempt
+                sys.stdout.write(
+                    f"    재시도 {attempt}/{max_retries - 1} "
+                    f"({type(e).__name__}, {backoff}s 후)...\n"
+                )
                 sys.stdout.flush()
-                last_report = now
-    sys.stdout.write(f"\r    생성 완료 ({token_count}청크, {int(_time.time()-start)}s 소요){' '*20}\n")
-    sys.stdout.flush()
-    content = "".join(parts)
+                _time.sleep(backoff)
+            else:
+                sys.stdout.write(
+                    f"    모든 재시도 실패 — partial {len(last_partial)}자로 복구 시도\n"
+                )
+                sys.stdout.flush()
+                content = last_partial
 
     try:
         data = _extract_json(content)
     except (ValueError, json.JSONDecodeError) as e:
-        # JSON 파싱 실패 시 fallback
+        # JSON 파싱 실패 시 fallback (Ollama 끊김 + partial 복구도 실패한 경우 포함)
+        err_msg = f"_요약 파싱 실패: {e}_"
+        if last_error is not None:
+            err_msg += f"\n\n_원인: {type(last_error).__name__}: {last_error}_"
         return {
             "title": "회의록 (자동 생성 실패)",
-            "summary_md": f"_요약 파싱 실패: {e}_\n\n원본 응답:\n\n{content}",
+            "summary_md": f"{err_msg}\n\n원본 응답:\n\n{content}",
         }
 
     title = str(data.get("title") or "회의록").strip()[:200]
     summary_md = str(data.get("summary_md") or "").strip()
+    if last_error is not None:
+        # partial 복구 성공한 경우 표시
+        summary_md = (
+            f"_⚠ Ollama 연결 중단으로 partial 응답에서 복구됨 "
+            f"({type(last_error).__name__})_\n\n{summary_md}"
+        )
     return {"title": title, "summary_md": summary_md}
 
 
