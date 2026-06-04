@@ -65,6 +65,10 @@ def transcribe_only(
     Returns:
         (audio_array, segments_list) — whisperx 내부 형식 그대로
     """
+    # whisperx는 bare 'ffmpeg'를 subprocess로 직접 호출하므로 PATH에 보장해 둔다.
+    from src.audio import ensure_ffmpeg_on_path
+    ensure_ffmpeg_on_path()
+
     whisperx = _load_whisperx()
     audio = whisperx.load_audio(wav_path)
 

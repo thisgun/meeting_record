@@ -97,14 +97,27 @@ def check_nvidia():
 
 def check_ffmpeg():
     section("FFmpeg")
-    exe = shutil.which("ffmpeg")
+    # 파이프라인(src/audio.py)과 동일한 탐색 로직 사용 — PATH에 없어도
+    # winget/choco/scoop 표준 설치 위치를 함께 탐색해 진단/실행 결과를 일치시킨다.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from src.audio import _find_tool
+        exe = _find_tool("ffmpeg")
+    except Exception:
+        exe = shutil.which("ffmpeg")
     if not exe:
-        fail("ffmpeg 없음", "winget install Gyan.FFmpeg --source winget")
+        fail(
+            "ffmpeg 없음",
+            "winget install Gyan.FFmpeg --source winget  (설치 후 새 터미널을 열어야 PATH 반영)",
+        )
         return
     try:
         r = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=5)
         first = r.stdout.split("\n")[0]
-        ok(first[:80])
+        detail = first[:80]
+        if not shutil.which("ffmpeg"):
+            detail += "  ⚠ PATH 미등록 (fallback 위치에서 발견 — 새 터미널 권장)"
+        ok(detail)
     except Exception as e:
         fail("ffmpeg 실행 실패", str(e))
 
@@ -264,7 +277,13 @@ def check_packages():
 
 
 def main() -> int:
-    print(f"\n{BOLD}===== metting_record 시스템 진단 ====={RESET}")
+    # cp949 콘솔/리다이렉트에서도 ✓/✗ 등 유니코드 출력이 깨지지 않도록 UTF-8 강제
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    print(f"\n{BOLD}===== meeting_record 시스템 진단 ====={RESET}")
     check_python()
     check_pytorch()
     check_nvidia()

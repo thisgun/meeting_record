@@ -20,7 +20,8 @@ cd meeting_record
 
 # 전용 가상환경 생성·활성화 (권장 — 전역 파이썬 오염/버전 충돌 방지)
 python -m venv .venv-meetingrec
-.\.venv-meetingrec\Scripts\Activate.ps1
+.\.venv-meetingrec\Scripts\Activate.ps1      # PowerShell
+# .venv-meetingrec\Scripts\activate.bat      # cmd(명령 프롬프트)일 경우 이 줄
 
 pip install -r requirements.txt
 python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)
@@ -29,7 +30,19 @@ python doctor.py                       # 시스템 진단
 python main.py "회의.mp3"               # 회의 처리
 ```
 
-> **💡 가상환경을 꼭 쓰세요.** 이 프로젝트는 `torch`·`whisperx`·`pyannote.audio` 등 무거운 패키지를 최신 버전으로 끌어옵니다. 전역 파이썬에 바로 설치하면 `open-webui` 처럼 버전을 고정해 쓰는 다른 앱과 충돌(`numpy`, `faster-whisper` 등)이 납니다. 전용 venv로 격리하면 안전합니다. 이후 작업할 때마다 먼저 `.\.venv-meetingrec\Scripts\Activate.ps1` 로 활성화하세요.
+> **💡 가상환경을 꼭 쓰세요.** 이 프로젝트는 `torch`·`whisperx`·`pyannote.audio` 등 무거운 패키지를 최신 버전으로 끌어옵니다. 전역 파이썬에 바로 설치하면 `open-webui` 처럼 버전을 고정해 쓰는 다른 앱과 충돌(`numpy`, `faster-whisper` 등)이 납니다. 전용 venv로 격리하면 안전합니다. 이후 작업할 때마다 새 터미널에서 먼저 활성화하세요.
+>
+> **셸별 활성화 명령** (사용하는 터미널에 맞게):
+>
+> | 셸 | 활성화 |
+> |---|---|
+> | PowerShell | `.\.venv-meetingrec\Scripts\Activate.ps1` |
+> | cmd(명령 프롬프트) | `.venv-meetingrec\Scripts\activate.bat` |
+> | Git Bash | `source .venv-meetingrec/Scripts/activate` |
+>
+> 활성화되면 프롬프트 앞에 `(.venv-meetingrec)` 가 붙습니다.
+> - **cmd에서 `Activate.ps1`을 실행하면 메모장이 열립니다** — `.ps1`은 PowerShell 전용이라 cmd에선 파일이 "열기"만 됩니다. cmd에선 위 `activate.bat`을 쓰세요.
+> - **PowerShell에서 "실행 정책" 오류**가 나면 한 번만: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 
 ### 2. 그누보드5 PHP 플러그인 (게시판 자동 등록)
 
@@ -45,11 +58,18 @@ python -m streamlit run app.py
 ## 필수 외부 의존성
 
 - **Python 3.10+** ([python.org](https://python.org))
-- **ffmpeg** (`winget install Gyan.FFmpeg`)
+- **ffmpeg** — 오디오 변환에 필수. OS별 설치:
+  | OS | 설치 명령 |
+  |---|---|
+  | Windows | `winget install Gyan.FFmpeg --source winget` |
+  | macOS | `brew install ffmpeg` |
+  | Linux | `sudo apt install ffmpeg` (또는 배포판 패키지 매니저) |
+
+  > ⚠️ **설치 후 반드시 새 터미널을 여세요.** PATH는 새 셸부터 반영되므로, 설치한 *같은* 창에서 바로 실행하면 `FFmpegNotFoundError`가 그대로 납니다. (winget 사용자가 가장 자주 겪는 함정)
 - **Ollama** + 모델 (예: `ollama pull gemma4:e2b`)
 - **그누보드5 + XAMPP/cafe24** (로컬 또는 원격 호스팅)
 
-`python doctor.py` 로 모든 의존성을 한 번에 점검 가능.
+`python doctor.py` 로 모든 의존성을 한 번에 점검 가능. (ffmpeg가 PATH에 없어도 winget/choco/scoop 표준 설치 위치를 자동 탐색하므로, 새 터미널을 못 연 경우에도 대개 동작합니다.)
 
 ---
 
@@ -324,12 +344,13 @@ cd c:\dev2\meeting_record
 
 # 전용 가상환경 생성·활성화 (최초 1회)
 python -m venv .venv-meetingrec
-.\.venv-meetingrec\Scripts\Activate.ps1
+.\.venv-meetingrec\Scripts\Activate.ps1      # PowerShell
+# .venv-meetingrec\Scripts\activate.bat      # cmd일 경우 이 줄
 
 pip install -r requirements.txt
 ```
 
-> 활성화된 venv 안에서는 프롬프트 앞에 `(.venv-meetingrec)` 가 표시됩니다. 새 터미널을 열 때마다 `.\.venv-meetingrec\Scripts\Activate.ps1` 로 다시 활성화하세요. (PowerShell 실행정책 오류가 나면 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` 1회 실행)
+> 활성화된 venv 안에서는 프롬프트 앞에 `(.venv-meetingrec)` 가 표시됩니다. 새 터미널을 열 때마다 다시 활성화해야 합니다 — 셸별 명령은 위 [빠른 시작](#1-python-파이프라인-회의-처리)의 활성화 표를 참고하세요. (cmd에서 `Activate.ps1`을 실행하면 메모장이 열리니 `activate.bat`을 쓰고, PowerShell 실행정책 오류가 나면 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` 를 1회 실행)
 
 ### AI 모델 (사전 다운로드, ~6GB)
 

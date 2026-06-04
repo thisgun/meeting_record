@@ -35,6 +35,14 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
 
     total_steps = 6 if upload else 5
 
+    # ffmpeg 위치 확인 + PATH 주입 (whisperx 등 서드파티의 bare 'ffmpeg' 호출 대비).
+    # 없으면 여기서 친절한 안내와 함께 즉시 중단.
+    try:
+        audio.ensure_ffmpeg_on_path()
+    except audio.FFmpegNotFoundError as e:
+        print(f"[error] {e}", file=sys.stderr)
+        return 2
+
     # 1) 원본 보관 + WAV 변환
     _print_step(1, total_steps, f"오디오 변환 (ffmpeg): {src_path.name}")
     t0 = time.time()
@@ -297,6 +305,13 @@ def show_meeting(meeting_id: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # cp949 콘솔/리다이렉트에서도 한글·✓/✗ 등 유니코드 출력이 깨지지 않도록 UTF-8 강제
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(description="회의록 자동 기록")
     parser.add_argument("audio_file", nargs="?", help="입력 오디오 파일 (m4a/mp3/wav/amr)")
     parser.add_argument("--no-upload", action="store_true",
