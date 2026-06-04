@@ -1,7 +1,7 @@
 # 회의록 자동 기록 시스템 (metting_record)
 
 [![Release](https://img.shields.io/github/v/release/thisgun/metting_record?style=flat)](https://github.com/thisgun/metting_record/releases)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-LGPL--2.1-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
 
 핸드폰으로 녹음한 회의 음성 파일을 업로드하면, AI가 자동으로 화자를 구분하고 텍스트로 변환한 뒤 요약해서 게시판에 등록해주는 도구입니다.

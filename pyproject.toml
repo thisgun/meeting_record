@@ -3,7 +3,7 @@ name = "metting-record"
 version = "0.1.0"
 description = "한국어 회의 음성을 자동으로 화자별 분리·요약하여 SQLite와 그누보드5 게시판에 등록"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "LGPL-2.1-or-later" }
 authors = [
     { name = "thisgun", email = "thisgun83@gmail.com" }
 ]
@@ -12,7 +12,7 @@ keywords = ["meeting", "stt", "whisper", "diarization", "ollama", "gnuboard5", "
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
