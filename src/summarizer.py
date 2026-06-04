@@ -1,4 +1,4 @@
-"""Ollama gemma4:e4b 기반 회의 요약."""
+"""Ollama gemma4:e2b 기반 회의 요약."""
 from __future__ import annotations
 
 import json
@@ -106,7 +106,7 @@ def _extract_json(raw: str) -> dict:
 def summarize(
     utterances: list[dict],
     *,
-    model: str = "gemma4:e4b",
+    model: str = "gemma4:e2b",
     host: str = "http://127.0.0.1:11434",
     timeout: float = 1800.0,
     keep_alive: str = "60m",

@@ -1,6 +1,6 @@
 <?php
 /**
- * POST /g5_meeting_api/comment.php
+ * POST /plugin/meeting_api/comment.php
  *
  * 회의 발화 1건을 댓글로 작성한다.
  *

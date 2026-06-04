@@ -134,26 +134,35 @@ def check_ffmpeg():
 
 def check_ollama():
     section("Ollama")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from config import load_config
+    cfg = load_config()
+    host = cfg.ollama_host.rstrip("/")
     try:
         import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:11434/api/version", timeout=3) as r:
+        with urllib.request.urlopen(f"{host}/api/version", timeout=3) as r:
             import json
             data = json.loads(r.read())
-            ok(f"Ollama 서버 응답", f"v{data.get('version')}")
+            ok(f"Ollama 서버 응답", f"{host} / v{data.get('version')}")
     except Exception as e:
-        fail("Ollama 서버 접속 실패", str(e)[:100])
+        fail("Ollama 서버 접속 실패", f"{host} — {str(e)[:100]}")
         return
 
     # 사용 가능 모델 확인
     try:
-        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as r:
+        with urllib.request.urlopen(f"{host}/api/tags", timeout=3) as r:
             import json
             data = json.loads(r.read())
             names = [m["name"] for m in data.get("models", [])]
-            if names:
-                ok(f"설치된 모델 {len(names)}개", ", ".join(names[:5]) + (" ..." if len(names) > 5 else ""))
+            if cfg.ollama_model in names:
+                ok(f"OLLAMA_MODEL 설치됨", cfg.ollama_model)
+            elif names:
+                warn(
+                    f"OLLAMA_MODEL 미설치: {cfg.ollama_model}",
+                    "설치된 모델: " + ", ".join(names[:5]) + (" ..." if len(names) > 5 else ""),
+                )
             else:
-                warn("설치된 모델 없음", "ollama pull gemma4:e2b")
+                warn("설치된 모델 없음", f"ollama pull {cfg.ollama_model}")
     except Exception as e:
         warn("모델 목록 조회 실패", str(e)[:100])
 
@@ -282,7 +291,7 @@ def check_packages():
     section("Python 핵심 패키지")
     deps = ["whisperx", "faster_whisper", "torch", "torchaudio",
             "speechbrain", "sklearn", "soundfile", "ollama",
-            "dotenv", "watchdog", "docx", "streamlit", "kiwipiepy"]
+            "dotenv", "watchdog", "docx", "streamlit", "huggingface_hub"]
     for d in deps:
         try:
             mod = __import__(d)
@@ -290,6 +299,11 @@ def check_packages():
             ok(f"{d}", f"v{ver}")
         except ImportError:
             fail(f"{d}", "pip install -r requirements.txt")
+    try:
+        import kiwipiepy
+        ok("kiwipiepy", f"v{getattr(kiwipiepy, '__version__', '?')} (선택)")
+    except ImportError:
+        warn("kiwipiepy 없음", "선택사항 — 한국어 키워드 추출은 정규식 fallback 사용")
 
 
 def main() -> int:

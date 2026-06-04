@@ -1,6 +1,6 @@
 <?php
 /**
- * POST /g5_meeting_api/post.php
+ * POST /plugin/meeting_api/post.php
  *
  * 회의 요약을 게시글로 작성한다.
  *

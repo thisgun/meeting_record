@@ -22,4 +22,7 @@ pydub>=0.25.1
 streamlit>=1.50.0
 python-docx>=1.0.0
 watchdog>=4.0.0
-kiwipiepy>=0.20.0       # 한국어 형태소 분석 (선택, 없으면 정규식 폴백)
+huggingface-hub>=0.23.0
+
+# 선택: 한국어 형태소 분석 정확도 향상. 필요할 때 별도 설치:
+# pip install "kiwipiepy>=0.20.0"

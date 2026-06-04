@@ -1,6 +1,6 @@
 <?php
 /**
- * GET /g5_meeting_api/health.php
+ * GET /plugin/meeting_api/health.php
  *
  * 의존성 점검: PHP, gnuboard5 설치 여부, DB 연결, 대상 게시판 존재 여부.
  */

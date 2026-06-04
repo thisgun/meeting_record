@@ -120,6 +120,18 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     pipeline_start = time.time()
 
     total_steps = 6 if upload else 5
+    clients = []
+    if upload:
+        clients = build_clients_from_env(cfg)
+        if not clients:
+            print(
+                "[error] G5 업로드 설정이 없습니다. 처음 테스트라면 "
+                "'python main.py <audio_file> --no-upload'로 로컬 저장만 실행하세요. "
+                "G5 업로드를 쓰려면 .env의 G5_API_BASE/G5_API_TOKEN 또는 G5_TARGETS를 설정하세요.",
+                file=sys.stderr,
+            )
+            return 3
+        _adopt_legacy_default_target(cfg, clients)
 
     # ffmpeg 위치 확인 + PATH 주입 (whisperx 등 서드파티의 bare 'ffmpeg' 호출 대비).
     # 없으면 여기서 친절한 안내와 함께 즉시 중단.
@@ -262,11 +274,6 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         return 0
 
     # 6) 그누보드5 업로드 (멀티 타겟 지원: G5_TARGETS=local,remote)
-    clients = build_clients_from_env(cfg)
-    if not clients:
-        print("[error] G5 클라이언트 없음 — .env의 G5_API_BASE/G5_API_TOKEN 확인")
-        return 3
-    _adopt_legacy_default_target(cfg, clients)
     target_names = ", ".join(c.name for c in clients)
     _print_step(6, total_steps, f"그누보드5 업로드 (타겟: {target_names})")
 

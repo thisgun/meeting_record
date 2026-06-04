@@ -108,7 +108,7 @@ def load_config() -> Config:
     return Config(
         huggingface_token=os.getenv("HUGGINGFACE_TOKEN", ""),
         ollama_host=_validated_ollama_host(),
-        ollama_model=os.getenv("OLLAMA_MODEL", "gemma4:e4b"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "gemma4:e2b"),
         device=device,
         whisper_model=os.getenv("WHISPER_MODEL", "medium"),
         whisper_compute_type=compute_type,

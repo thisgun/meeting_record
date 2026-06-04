@@ -1,6 +1,6 @@
 [project]
 name = "meeting-record"
-version = "0.1.0"
+version = "0.2.0"
 description = "한국어 회의 음성을 자동으로 화자별 분리·요약하여 SQLite와 그누보드5 게시판에 등록"
 readme = "README.md"
 license = { text = "LGPL-2.1-or-later" }
@@ -39,6 +39,7 @@ dependencies = [
     "streamlit>=1.50.0",
     "python-docx>=1.0.0",
     "watchdog>=4.0.0",
+    "huggingface-hub>=0.23.0",
 ]
 
 [project.optional-dependencies]

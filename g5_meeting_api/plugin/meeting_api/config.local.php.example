@@ -11,7 +11,8 @@
  */
 
 // 강력한 API 토큰으로 교체 (Python .env의 G5_API_TOKEN과 같은 값으로 맞춤)
-define('meeting_API_TOKEN', '여기에-강력한-랜덤-토큰-48자-이상');
+// 빈 값 그대로 두면 API가 500으로 실패하여 미설정 상태를 알려준다.
+define('meeting_API_TOKEN', '');
 
 // 운영 환경에서는 false 권장 (에러 메시지가 외부에 노출되지 않도록)
 define('meeting_API_DEBUG', false);

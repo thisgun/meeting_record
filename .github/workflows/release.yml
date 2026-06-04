@@ -78,10 +78,15 @@ jobs:
             echo '```bash'
             echo "git clone https://github.com/${{ github.repository }}.git"
             echo "cd meeting_record"
+            echo "python -m venv .venv-meetingrec"
+            echo "source .venv-meetingrec/bin/activate    # Windows: .venv-meetingrec\\Scripts\\activate"
+            echo "python -m pip install --upgrade pip"
             echo "pip install -r requirements.txt"
+            echo "ollama pull gemma4:e2b                  # 기본 요약 모델"
             echo "python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)"
             echo "cp .env.example .env                   # 환경 변수 채우기"
             echo "python doctor.py                       # 시스템 진단"
+            echo "python main.py \"회의.mp3\" --no-upload # 첫 실행: G5 없이 로컬 저장만"
             echo '```'
             echo ""
             echo "**그누보드5 PHP 플러그인** (게시판 자동 등록):"
