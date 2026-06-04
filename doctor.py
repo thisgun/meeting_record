@@ -212,7 +212,7 @@ def check_xampp():
     section("XAMPP (MariaDB / Apache / PHP)")
     try:
         import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1/g5_metting_api/health.php", timeout=3) as r:
+        with urllib.request.urlopen("http://127.0.0.1/gnuboard5/plugin/metting_api/health.php", timeout=3) as r:
             import json
             data = json.loads(r.read())
             if data.get("ok"):

@@ -697,59 +697,105 @@ python dict.py add 갈매기특공대 --pattern "갈매기 특공대"
 
 > **권장**: 첫 회의 처리 후 STT 결과를 훑어보며 흔한 오류 단어를 등록하세요. 두 번째 회의부터 같은 오류가 자동 교정됩니다.
 
-### 원격 그누보드5 서버에 등록 (cafe24 등)
+### 그누보드5 plugin 표준 배치
 
-로컬 XAMPP 외에 cafe24 같은 외부 호스팅의 그누보드5에도 자동 등록 가능.
+회의록 등록 PHP API는 **그누보드5의 표준 `plugin/` 디렉토리** 안에 `metting_api/` 폴더로 설치합니다. 그누보드5 원본 코드는 한 줄도 수정하지 않고 새 폴더만 추가하는 방식.
 
-**배포 패키지 위치**: `c:\dev2\g5_metting_api_dist\` (또는 ZIP: `c:\dev2\g5_metting_api_dist.zip`)
+**디렉토리 구조**:
+```
+gnuboard5/                         ← 원본 (수정 안 함)
+└── plugin/
+    └── metting_api/               ← 추가하는 폴더
+        ├── _bootstrap.php
+        ├── _load_gnuboard5.php
+        ├── config.php             ← G5 경로 자동 (../../로 그누보드5 루트)
+        ├── config.local.php       ← 운영 토큰 (git 제외)
+        ├── health.php
+        ├── post.php
+        ├── comment.php
+        └── setup_board.php        ← 게시판 자동 생성 (1회 후 삭제)
+```
 
-**설치 단계**:
-1. **FTP로 업로드**: ZIP을 풀어 그누보드5 옆 폴더에 업로드
+**호출 URL**: `https://YOUR-DOMAIN/<gnuboard폴더>/plugin/metting_api/health.php`
+
+#### 로컬 (XAMPP)
+이미 `c:\dev2\gnuboard5\plugin\metting_api\` 에 설치되어 있습니다.
+```powershell
+curl http://127.0.0.1/gnuboard5/plugin/metting_api/health.php
+python doctor.py
+```
+
+#### 원격 (cafe24 등) — 4단계
+
+**배포 패키지**: `c:\dev2\g5_metting_api_dist\` (ZIP: `c:\dev2\g5_metting_api_dist.zip`, 12KB)
+
+1. **FTP 업로드** — ZIP 풀면 안에 `plugin/metting_api/` 폴더가 그대로 있음. 이 폴더를 원격 그누보드5의 `plugin/` 안에 업로드:
    ```
    /home/<user>/www/
-   ├── gnu5615/              ← 기존 그누보드5
-   └── g5_metting_api/       ← 업로드
-   ```
-2. **운영 토큰 설정**: `config.local.php.example` → `config.local.php` 복사 후
-   - `METTING_API_TOKEN` 강력한 랜덤 값으로 변경
-   - `METTING_API_DEBUG = false` 확인
-3. **게시판 자동 생성** (1회만):
-   ```
-   https://YOUR-DOMAIN/g5_metting_api/setup_board.php?token=YOUR_TOKEN
-   ```
-4. **setup_board.php 삭제** (보안)
-5. **헬스체크**:
-   ```
-   https://YOUR-DOMAIN/g5_metting_api/health.php
+   └── gnu5615/
+       └── plugin/
+           └── metting_api/        ← 업로드
    ```
 
-**Python `.env` 설정 — 원격만**:
-```env
-G5_API_BASE=https://YOUR-DOMAIN/g5_metting_api
-G5_API_TOKEN=원격_토큰
-```
+2. **운영 토큰 설정** — `config.local.php.example` → `config.local.php` 복사 후 토큰/디버그 변경:
+   ```php
+   define('METTING_API_TOKEN', '강력한_랜덤_48자_이상');
+   define('METTING_API_DEBUG', false);
+   ```
 
-**`.env` 설정 — 로컬 + 원격 동시 등록**:
+3. **게시판 자동 생성 (1회)**:
+   ```
+   https://YOUR-DOMAIN/gnu5615/plugin/metting_api/setup_board.php?token=YOUR_TOKEN
+   ```
+   성공 후 **setup_board.php 즉시 삭제**.
+
+4. **Python `.env`**:
+   ```env
+   G5_API_BASE=https://YOUR-DOMAIN/gnu5615/plugin/metting_api
+   G5_API_TOKEN=원격_토큰
+   ```
+
+#### 로컬 + 원격 동시 등록
+
 ```env
 G5_TARGETS=local,remote
-G5_API_BASE_LOCAL=http://127.0.0.1/g5_metting_api
+G5_API_BASE_LOCAL=http://127.0.0.1/gnuboard5/plugin/metting_api
 G5_API_TOKEN_LOCAL=로컬_토큰
-G5_API_BASE_REMOTE=https://YOUR-DOMAIN/g5_metting_api
+G5_API_BASE_REMOTE=https://YOUR-DOMAIN/gnu5615/plugin/metting_api
 G5_API_TOKEN_REMOTE=원격_토큰
 ```
-각 회의 처리 시 두 게시판에 동시 등록 → 로컬은 검색/분석, 원격은 공유용.
 
-**원격 진단**:
+회의 처리 시 두 게시판에 동시 등록.
+
+#### 검증
+
 ```powershell
+python doctor.py                                # G5 타겟 섹션
+python scripts/check_g5_remote.py               # 전체 타겟 health + 테스트 글
 python scripts/check_g5_remote.py --target remote
-python doctor.py        # G5 타겟 섹션에 모든 클라이언트 health 표시
 ```
 
-**보안 주의사항**:
-- `config.local.php` 절대 git에 올리지 말 것
-- 그누보드5 `install/` 폴더는 설치 완료 후 삭제 권장
-- HTTPS 사용 (토큰이 평문 전송됨)
-- 자세한 가이드: `c:\dev2\g5_metting_api_dist\README.md`
+#### plugin 방식의 장점
+
+- ✅ **그누보드5 원본 무수정** — `plugin/` 표준 디렉토리에 새 폴더만 추가
+- ✅ **그누보드5 업그레이드 안전** — 충돌 없음
+- ✅ **G5 경로 자동** — `__DIR__ . '/../..'` 로 루트 인식
+- ✅ **common.php 안전 로드** — plugin 안에서는 SCRIPT_FILENAME 위장 없이 정상 동작
+
+#### 기존 `c:\dev2\g5_metting_api\` 정리 (선택)
+
+이전 방식(그누보드5 옆 별도 폴더) 잔재. 선택사항:
+```powershell
+Remove-Item C:\xampp\htdocs\g5_metting_api      # junction 정리
+# Remove-Item C:\dev2\g5_metting_api -Recurse   # 원본 폴더 (백업 후)
+```
+
+#### 보안 주의사항
+
+- `config.local.php` 절대 git/FTP에서 공유 안 함 (토큰 노출)
+- `setup_board.php` 작업 후 즉시 삭제
+- 그누보드5 `install/` 폴더 운영 시 삭제
+- HTTPS 사용 (토큰 평문 전송 보호)
 
 ### 화자 등록 (enrollment) — "사용자N" 대신 실제 이름
 
