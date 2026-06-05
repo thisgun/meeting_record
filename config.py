@@ -21,6 +21,7 @@ class Config:
     ollama_num_predict: int
     ollama_num_gpu: int | None
     ollama_timeout_sec: int
+    ollama_summary_chunk_sec: int
     ollama_min_free_ram_gib: float
     ollama_memory_wait_sec: int
     device: str                       # "cpu" | "cuda" (auto는 load_config에서 해석됨)
@@ -193,6 +194,7 @@ def load_config() -> Config:
         ollama_num_predict=_int_env("OLLAMA_NUM_PREDICT", 8192, minimum=1024),
         ollama_num_gpu=_optional_int_env("OLLAMA_NUM_GPU", minimum=0, maximum=128),
         ollama_timeout_sec=_int_env("OLLAMA_TIMEOUT_SEC", 300, minimum=60),
+        ollama_summary_chunk_sec=_int_env("OLLAMA_SUMMARY_CHUNK_SEC", 900, minimum=0),
         ollama_min_free_ram_gib=_float_env("OLLAMA_MIN_FREE_RAM_GB", 4.0, minimum=0.0),
         ollama_memory_wait_sec=_int_env("OLLAMA_MEMORY_WAIT_SEC", 30, minimum=0),
         device=device,

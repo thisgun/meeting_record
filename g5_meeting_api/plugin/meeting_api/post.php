@@ -56,8 +56,6 @@ $ip = meeting_sql_escape($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
 $now = G5_TIME_YMDHIS;
 $bo_table_esc = meeting_sql_escape($m_bo_table);
 
-$url_base = G5_BBS_URL . '/board.php?bo_table=' . urlencode($m_bo_table) . '&wr_id=';
-
 if ($m_idempotency_key !== '') {
     $existing = sql_fetch("SELECT wr_id FROM $write_table_sql
         WHERE wr_is_comment = 0
@@ -70,7 +68,7 @@ if ($m_idempotency_key !== '') {
         api_ok([
             'wr_id' => $existing_wr_id,
             'bo_table' => $m_bo_table,
-            'url' => $url_base . $existing_wr_id,
+            'url' => meeting_public_post_url($m_bo_table, $existing_wr_id),
             'idempotent' => true,
         ]);
     }
@@ -126,6 +124,6 @@ meeting_db_commit();
 api_ok([
     'wr_id' => (int)$new_wr_id,
     'bo_table' => $m_bo_table,
-    'url' => $url_base . $new_wr_id,
+    'url' => meeting_public_post_url($m_bo_table, $new_wr_id),
     'idempotent' => false,
 ]);

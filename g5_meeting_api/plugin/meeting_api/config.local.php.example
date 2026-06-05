@@ -20,6 +20,10 @@ define('meeting_API_DEBUG', false);
 // 게시판 코드 변경 (기본 'meeting')
 // define('meeting_BO_TABLE', 'meeting');
 
+// 게시글 응답 URL이 호스팅 환경에서 잘못 조립되면 공개 그누보드5 루트를 직접 지정하세요.
+// 예: https://example.com/gnu5624
+// define('meeting_PUBLIC_BASE_URL', 'https://YOUR-DOMAIN/gnu5624');
+
 // setup_board.php를 실행할 때만 true로 바꾸고, 실행 후 false로 되돌리거나 파일을 삭제하세요.
 // define('meeting_API_ALLOW_SETUP', true);
 

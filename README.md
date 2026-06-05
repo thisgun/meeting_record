@@ -382,6 +382,7 @@ OLLAMA_NUM_CTX_MAX=32768
 OLLAMA_NUM_PREDICT=8192
 OLLAMA_NUM_GPU=
 OLLAMA_TIMEOUT_SEC=300
+OLLAMA_SUMMARY_CHUNK_SEC=900
 OLLAMA_MIN_FREE_RAM_GB=4
 OLLAMA_MEMORY_WAIT_SEC=30
 
@@ -486,8 +487,9 @@ STT 캐시는 남으므로 메모리를 비우고 다시 실행하면 요약 단
 ```env
 OLLAMA_MODEL=gemma4:e2b
 OLLAMA_KEEP_ALIVE=0
-OLLAMA_NUM_CTX_MAX=8192      # 긴 회의면 16384, 안정성 우선이면 8192
-OLLAMA_NUM_PREDICT=4096
+OLLAMA_NUM_CTX_MAX=32768     # 100분 안팎 긴 회의 권장. 짧은 회의만 8192~16384 가능
+OLLAMA_NUM_PREDICT=8192
+OLLAMA_SUMMARY_CHUNK_SEC=900 # 긴 회의는 15분 단위 상세 요약 후 최종 통합
 OLLAMA_MIN_FREE_RAM_GB=6     # gemma4:e2b는 4GB보다 6~8GB 권장
 # GPU offload가 계속 실패하면 CPU만 사용. 단, free RAM이 충분해야 합니다.
 # OLLAMA_NUM_GPU=0
@@ -495,8 +497,10 @@ OLLAMA_MIN_FREE_RAM_GB=6     # gemma4:e2b는 4GB보다 6~8GB 권장
 WHISPER_BATCH_SIZE=4
 ```
 
-요약 품질보다 안정성이 더 중요하거나 free RAM 확보가 어렵다면 `qwen3:4b` 같은 더 작은
-모델을 먼저 사용해 보세요.
+긴 회의는 기본적으로 `OLLAMA_SUMMARY_CHUNK_SEC` 기준으로 구간별 상세 요약을 만든 뒤 최종
+회의록으로 통합합니다. `OLLAMA_NUM_CTX_MAX`를 너무 낮추면 구간 요약 또는 최종 통합 단계에서
+JSON 지시가 context 밖으로 밀려 `##` 같은 조각 응답이 나올 수 있습니다. 요약 품질보다
+안정성이 더 중요하거나 free RAM 확보가 어렵다면 `qwen3:4b` 같은 더 작은 모델을 먼저 사용해 보세요.
 
 #### 추천 조합 (107분 회의 기준)
 
@@ -1269,6 +1273,52 @@ python watcher.py
 않고 요약 단계부터 이어갈 수 있습니다. 메모리 여유가 충분한 PC에서 연속 파일 처리 속도가
 중요하면 `OLLAMA_KEEP_ALIVE=10m`처럼 모델을 잠시 유지할 수 있지만, 저메모리 환경에서는
 `OLLAMA_KEEP_ALIVE=0`을 유지하세요.
+
+### 문제 10: 요약 결과가 `회의록 (자동 생성 실패)` 또는 원본 응답 `##`로 나옴
+
+**원인**: Ollama가 정상 연결은 됐지만 JSON 대신 `##` 같은 마크다운 조각만 반환한 경우입니다.
+긴 회의에서 `OLLAMA_NUM_CTX_MAX`가 부족해 JSON 출력 지시가 context 밖으로 잘렸거나, 모델이
+JSON 출력 지시를 놓쳤거나, 이전 요청 실패 뒤 모델 상태가 불안정할 때 발생할 수 있습니다.
+
+**해결 (이미 적용됨)**:
+- JSON 파싱 실패 시 즉시 성공 처리하지 않고 재시도합니다.
+- 재시도 후에도 JSON이 아니면 DB 저장과 그누보드5 업로드 전에 실패로 종료합니다.
+- 긴 회의는 `OLLAMA_SUMMARY_CHUNK_SEC` 기준으로 구간별 상세 요약을 만든 뒤 최종 통합합니다.
+- 최종 요약에 6개 필수 섹션이 없거나 본문이 너무 짧으면 업로드하지 않습니다.
+- transcript가 현재 `OLLAMA_NUM_CTX_MAX`보다 크면 Ollama 호출 전에 필요한 권장 context를
+  안내하고 중단합니다.
+- STT 캐시는 남아 있으므로 다음 실행은 음성 인식부터 다시 하지 않습니다.
+
+이미 실패 요약이 올라간 게시글은 그누보드5 관리자에서 삭제한 뒤 다시 실행하세요. 계속 반복되면
+다음처럼 context와 출력 길이를 조정하거나 Ollama 모델을 재시작합니다.
+
+```powershell
+ollama stop gemma4:e2b
+python watcher.py
+```
+
+```env
+OLLAMA_NUM_CTX_MAX=32768
+OLLAMA_NUM_PREDICT=8192
+OLLAMA_SUMMARY_CHUNK_SEC=900
+```
+
+### 문제 11: 업로드 성공 후 출력되는 게시글 URL 경로가 이상함
+
+**증상**: 업로드는 성공했지만 URL이
+`/gnuboard5/index.php/.../bbs/board.php?...`처럼 실제 그누보드5 공개 경로와 다르게 출력됩니다.
+
+**원인**: 일부 호스팅 환경에서 그누보드5의 `G5_BBS_URL` 상수가 서버 내부 경로나
+`SCRIPT_NAME` 보정값을 섞어 계산하는 경우가 있습니다.
+
+**해결 (이미 적용됨)**:
+- Python 클라이언트가 `G5_API_BASE`에서 공개 그누보드5 루트를 계산해 게시글 URL을 보정합니다.
+- PHP 플러그인도 `G5_BBS_URL`에 의존하지 않고 `/plugin/meeting_api` 앞 경로를 기준으로 URL을 만듭니다.
+- 그래도 특수 호스팅에서 어긋나면 `config.local.php`에 공개 루트를 직접 지정하세요.
+
+```php
+define('meeting_PUBLIC_BASE_URL', 'https://YOUR-DOMAIN/gnu5624');
+```
 
 ---
 

@@ -262,7 +262,16 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
             max_ctx=cfg.ollama_num_ctx_max,
             num_predict=cfg.ollama_num_predict,
             num_gpu=cfg.ollama_num_gpu,
+            chunk_sec=cfg.ollama_summary_chunk_sec,
         )
+    except summarizer.SummaryContextError as e:
+        print(f"[error] Ollama context 부족: {e}", file=sys.stderr)
+        print(
+            f"[error] STT 결과 캐시는 저장되어 있습니다: {cache_path.name}. "
+            f".env에서 OLLAMA_NUM_CTX_MAX={e.recommended_ctx} 이상으로 올린 뒤 다시 실행하세요.",
+            file=sys.stderr,
+        )
+        return 5
     except Exception as e:
         print(f"[error] Ollama 요약 실패: {e}", file=sys.stderr)
         print(

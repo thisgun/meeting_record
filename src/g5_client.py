@@ -12,6 +12,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from typing import Optional
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 
@@ -101,6 +102,23 @@ def _non_json_message(url: str, status_code: int, body: str) -> str:
     if _remote_debug_enabled():
         suffix = f": {_compact_remote_text(body)}"
     return f"Non-JSON response from {url} (HTTP {status_code}, {len(body.encode('utf-8'))} bytes){suffix}"
+
+
+def _public_post_url_from_api_base(api_base: str, bo_table: str, wr_id: int) -> str:
+    """Build canonical board URL from .../plugin/meeting_api API base."""
+    parsed = urlsplit(api_base.rstrip("/"))
+    path = parsed.path.rstrip("/")
+    marker = "/plugin/meeting_api"
+    if path.endswith(marker):
+        g5_path = path[: -len(marker)]
+    elif marker in path:
+        g5_path = path.split(marker, 1)[0]
+    else:
+        g5_path = path
+    g5_path = g5_path.rstrip("/")
+    board_path = f"{g5_path}/bbs/board.php" if g5_path else "/bbs/board.php"
+    query = f"bo_table={quote(str(bo_table))}&wr_id={int(wr_id)}"
+    return urlunsplit((parsed.scheme, parsed.netloc, board_path, query, ""))
 
 
 class G5ClientBase(ABC):
@@ -230,14 +248,22 @@ class G5MeetingApiClient(G5ClientBase):
         bo_table: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> dict:
+        target_bo_table = bo_table or self.bo_table
         payload = {
             "subject": subject,
             "content": content,
-            "bo_table": bo_table or self.bo_table,
+            "bo_table": target_bo_table,
         }
         if idempotency_key:
             payload["idempotency_key"] = idempotency_key
-        return self._post("post.php", payload, max_retries=0)
+        data = self._post("post.php", payload, max_retries=0)
+        if data.get("wr_id"):
+            data["url"] = _public_post_url_from_api_base(
+                self.api_base,
+                str(data.get("bo_table") or target_bo_table),
+                int(data["wr_id"]),
+            )
+        return data
 
     def create_comment(
         self,

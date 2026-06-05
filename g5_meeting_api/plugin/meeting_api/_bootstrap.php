@@ -273,6 +273,57 @@ function meeting_normalize_idempotency_key($value) {
     return $key;
 }
 
+function meeting_request_scheme() {
+    $forwarded = strtolower(trim((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')));
+    if ($forwarded !== '') {
+        $first = trim(explode(',', $forwarded)[0]);
+        if ($first === 'https' || $first === 'http') {
+            return $first;
+        }
+    }
+    $https = strtolower(trim((string)($_SERVER['HTTPS'] ?? '')));
+    if ($https !== '' && $https !== 'off') {
+        return 'https';
+    }
+    return ((string)($_SERVER['SERVER_PORT'] ?? '') === '443') ? 'https' : 'http';
+}
+
+function meeting_public_g5_url() {
+    if (defined('meeting_PUBLIC_BASE_URL') && trim((string)meeting_PUBLIC_BASE_URL) !== '') {
+        return rtrim((string)meeting_PUBLIC_BASE_URL, '/');
+    }
+
+    $host = trim((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ''));
+    if ($host !== '') {
+        $host = trim(explode(',', $host)[0]);
+    }
+    if ($host === '') {
+        $host = trim((string)($_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost')));
+    }
+
+    $script = (string)($_SERVER['SCRIPT_NAME'] ?? ($_SERVER['PHP_SELF'] ?? ''));
+    $base_path = '';
+    $marker = '/plugin/meeting_api';
+    $pos = strpos($script, $marker);
+    if ($pos !== false) {
+        $base_path = substr($script, 0, $pos);
+    } else {
+        // /gnu5624/plugin/meeting_api/post.php 형태가 아니어도 endpoint 위치 기준으로 추정
+        $base_path = dirname(dirname(dirname($script)));
+        if ($base_path === '.' || $base_path === DIRECTORY_SEPARATOR) {
+            $base_path = '';
+        }
+    }
+    $base_path = rtrim(str_replace('\\', '/', $base_path), '/');
+    return meeting_request_scheme() . '://' . $host . $base_path;
+}
+
+function meeting_public_post_url($bo_table, $wr_id) {
+    return meeting_public_g5_url()
+        . '/bbs/board.php?bo_table=' . rawurlencode((string)$bo_table)
+        . '&wr_id=' . (int)$wr_id;
+}
+
 function meeting_db_rollback_if_open() {
     if (!empty($GLOBALS['meeting_api_transaction_open'])) {
         @sql_query('ROLLBACK', false);

@@ -1,4 +1,9 @@
-from src.g5_client import _compact_remote_text, _non_json_message, _remote_error_message
+from src.g5_client import (
+    _compact_remote_text,
+    _non_json_message,
+    _public_post_url_from_api_base,
+    _remote_error_message,
+)
 
 
 def test_remote_error_uses_short_server_error() -> None:
@@ -28,3 +33,13 @@ def test_compact_remote_text_normalizes_whitespace_and_truncates() -> None:
     assert "\n" not in value
     assert len(value) == 20
     assert value.endswith("...")
+
+
+def test_public_post_url_from_api_base_uses_gnuboard_root() -> None:
+    url = _public_post_url_from_api_base(
+        "https://thisgun01.mycafe24.com/gnu5624/plugin/meeting_api",
+        "meeting",
+        426,
+    )
+
+    assert url == "https://thisgun01.mycafe24.com/gnu5624/bbs/board.php?bo_table=meeting&wr_id=426"

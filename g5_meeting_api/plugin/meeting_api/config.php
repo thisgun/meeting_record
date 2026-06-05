@@ -39,6 +39,9 @@ if (!defined('meeting_API_ALLOWED_IPS')) define('meeting_API_ALLOWED_IPS', '');
 if (!defined('meeting_API_MAX_BODY_BYTES')) define('meeting_API_MAX_BODY_BYTES', 3145728); // 3 MiB
 if (!defined('meeting_API_MAX_POST_CONTENT_BYTES')) define('meeting_API_MAX_POST_CONTENT_BYTES', 2097152); // 2 MiB
 if (!defined('meeting_API_MAX_COMMENT_CONTENT_BYTES')) define('meeting_API_MAX_COMMENT_CONTENT_BYTES', 262144); // 256 KiB
+// 공개 게시판 URL 자동 계산이 호스팅 환경에서 어긋나면 config.local.php에서
+// 예: define('meeting_PUBLIC_BASE_URL', 'https://example.com/gnu5624');
+if (!defined('meeting_PUBLIC_BASE_URL')) define('meeting_PUBLIC_BASE_URL', '');
 
 // 운영 안전을 위해 디버그는 기본 false. 필요할 때 config.local.php에서 명시적으로 true 지정.
 if (!defined('meeting_API_DEBUG')) define('meeting_API_DEBUG', false);
