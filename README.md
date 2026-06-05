@@ -390,6 +390,9 @@ OLLAMA_MEMORY_WAIT_SEC=30
 WHISPER_MODEL=small              # tiny/base/small/medium/large-v3
 WHISPER_COMPUTE_TYPE=int8        # CPU에서는 int8 권장
 WHISPER_LANGUAGE=ko
+TYPO_CORRECTION=1                # STT 후 사전/.env 오타 보정 적용
+TYPO_CORRECTION_RULES=           # 예: 지개차=>지게차;태양관=>태양광
+TYPO_CORRECTION_AI=0             # 1이면 로컬 Ollama로 명백한 STT 오타만 추가 검사
 
 # 그누보드5 API
 G5_API_BASE=http://127.0.0.1/gnuboard5/plugin/meeting_api
@@ -440,6 +443,10 @@ meeting-export 5 --format html
 ```powershell
 # 화자 수를 강제 지정 (자동 추정 끄기)
 python main.py "회의.mp3" --speakers 3
+
+# 다인원 회의가 1~2명으로 뭉치면 실제 예상 화자 수로 다시 분리
+# STT 캐시가 있어도 화자 라벨만 다시 계산해서 캐시를 갱신합니다.
+python main.py "회의.mp3" --speakers 6
 
 # 그누보드5 업로드 생략 (로컬 DB에만 저장)
 python main.py "회의.mp3" --no-upload
@@ -766,6 +773,33 @@ watcher.py로 무인 운영 시에도 자동 적용됩니다.
 ### 도메인 사전 — STT 정확도 향상
 
 회의에 자주 등장하는 고유명사/전문용어를 사전에 등록해두면 STT가 더 정확하게 인식하고, 자주 발생하는 오인식은 자동으로 교정됩니다.
+
+**`.env`에서 간단 오타 보정**
+
+몇 개만 빠르게 고치고 싶다면 DB 사전에 등록하지 않고 `.env`에 문자 그대로 치환 규칙을 넣을 수 있습니다.
+
+```env
+TYPO_CORRECTION=1
+TYPO_CORRECTION_RULES=중대재수자=>중대재해;태양관=>태양광;지개차=>지게차
+```
+
+- 여러 규칙은 `;`로 구분합니다.
+- `TYPO_CORRECTION_RULES`는 정규식이 아니라 단순 문자열 치환입니다.
+- 회의 처리 시 캐시를 쓰더라도 발화 텍스트에 다시 적용되고, 보정이 있으면 `.segments.json` 캐시도 갱신됩니다.
+- 복잡한 정규식이나 많은 용어는 아래 `dict.py` 사전 관리 기능을 쓰는 편이 좋습니다.
+
+**로컬 AI 오타 보정 (선택)**
+
+규칙으로 등록하지 않은 명백한 STT 오인식까지 문맥으로 잡고 싶다면 로컬 Ollama 보정을 켤 수 있습니다.
+
+```env
+TYPO_CORRECTION=1
+TYPO_CORRECTION_AI=1
+TYPO_CORRECTION_AI_MODEL=          # 빈 값이면 OLLAMA_MODEL 사용
+TYPO_CORRECTION_AI_CHUNK_SIZE=30   # 한 번에 검사할 발화 수
+```
+
+AI 보정은 발화의 `text`만 고치며 화자, 시간, 발화 순서는 바꾸지 않습니다. 프롬프트는 요약/문체 개선/순화/재작성을 금지하고 “명백한 STT 오타만” 고치도록 제한되어 있습니다. 그래도 고유명사나 농담 표현을 잘못 고칠 수 있으므로 중요한 회의에서는 `TYPO_CORRECTION_RULES` 또는 `dict.py` 사전 규칙을 우선 권장합니다.
 
 **기본 사용**
 
@@ -1103,6 +1137,8 @@ WATCH_STABILITY_SEC=5           # 파일 안정 확인 시간
 WATCH_NO_UPLOAD=0               # 1이면 G5 업로드 생략
 WATCH_LOG=./data/watch.log      # 처리 이력
 ```
+
+다인원 회의인데 자동 추정 결과가 `사용자1`, `사용자2` 정도로 뭉치면 `WATCH_SPEAKERS=6`처럼 실제 예상 화자 수를 지정하세요. 기존 `.segments.json` 캐시가 있어도 watcher가 `main.py --speakers 6`으로 실행하므로 STT는 재사용하고 화자 라벨만 다시 분리합니다.
 
 **활용 예시:**
 - 핸드폰 SMB 공유로 `data\watch\` 폴더에 직접 업로드 → 자동 처리

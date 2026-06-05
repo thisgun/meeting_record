@@ -31,6 +31,11 @@ class Config:
     whisper_cpu_threads: int
     whisper_batch_size: int
     whisper_vad_filter: bool
+    typo_correction_enabled: bool
+    typo_correction_rules: str
+    typo_correction_ai_enabled: bool
+    typo_correction_ai_model: str
+    typo_correction_ai_chunk_size: int
     g5_api_base: str
     g5_api_token: str
     g5_bo_table: str
@@ -92,6 +97,13 @@ def _float_env(env_key: str, default: float, *, minimum: float | None = None) ->
         _warn_once(env_key, f"[warn] {env_key}={value} 값이 너무 작음 → {minimum} 사용")
         return minimum
     return value
+
+
+def _bool_env(env_key: str, default: bool) -> bool:
+    raw = _clean_env_value(os.getenv(env_key))
+    if not raw:
+        return default
+    return raw.lower() not in ("0", "false", "no", "off")
 
 
 def _optional_int_env(
@@ -204,6 +216,11 @@ def load_config() -> Config:
         whisper_cpu_threads=int(os.getenv("WHISPER_CPU_THREADS", "0")),
         whisper_batch_size=int(os.getenv("WHISPER_BATCH_SIZE", "8")),
         whisper_vad_filter=os.getenv("WHISPER_VAD_FILTER", "1") not in ("0", "false", "False", ""),
+        typo_correction_enabled=_bool_env("TYPO_CORRECTION", True),
+        typo_correction_rules=os.getenv("TYPO_CORRECTION_RULES", ""),
+        typo_correction_ai_enabled=_bool_env("TYPO_CORRECTION_AI", False),
+        typo_correction_ai_model=_clean_env_value(os.getenv("TYPO_CORRECTION_AI_MODEL", "")),
+        typo_correction_ai_chunk_size=_int_env("TYPO_CORRECTION_AI_CHUNK_SIZE", 30, minimum=1),
         g5_api_base=os.getenv("G5_API_BASE", "").rstrip("/"),
         g5_api_token=os.getenv("G5_API_TOKEN", ""),
         g5_bo_table=os.getenv("G5_BO_TABLE", "meeting"),

@@ -17,6 +17,7 @@ from src.summarizer import (
     _parse_summary_response,
     _section_min_summary_chars,
     _split_utterances_for_summary,
+    _summarize_chunk,
     _title_from_chunk_summaries,
     summarize,
 )
@@ -113,7 +114,7 @@ def test_split_utterances_for_summary_uses_time_chunks() -> None:
 
 def test_chunk_summary_min_chars_adapts_to_short_tail_chunk() -> None:
     assert _chunk_min_summary_chars("짧은 마지막 발화" * 10) == 250
-    assert _chunk_min_summary_chars("긴 구간 발화" * 1000) == 700
+    assert _chunk_min_summary_chars("긴 구간 발화" * 1000) == 600
 
 
 def test_section_min_chars_relaxes_for_short_meetings() -> None:
@@ -133,6 +134,46 @@ def test_parse_chunk_response_allows_heading_variation() -> None:
     )
 
     assert parsed["title"] == "구간 요약"
+
+
+def test_parse_chunk_response_accepts_six_hundred_char_intermediate_summary() -> None:
+    summary_md = "## 구간 개요\n- " + ("구간 핵심과 후속 논의를 보존합니다. " * 45)
+
+    parsed = _parse_chunk_response(
+        json.dumps({"title": "구간 요약", "summary_md": summary_md}, ensure_ascii=False),
+        min_summary_chars=600,
+    )
+
+    assert len(parsed["summary_md"]) >= 600
+
+
+def test_summarize_chunk_preserves_transcript_when_chunk_summary_is_unusable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_chat_json_with_retries(*args, **kwargs):
+        raise SummaryParseError("요약 본문이 너무 짧습니다", raw='{"summary_md": "짧음"}')
+
+    monkeypatch.setattr(summarizer_module, "_chat_json_with_retries", fake_chat_json_with_retries)
+
+    parsed = _summarize_chunk(
+        object(),
+        [
+            {"start": 858, "end": 870, "speaker": "사용자1", "text": "사과를 먼저 해야 합니다."},
+            {"start": 900, "end": 930, "speaker": "사용자2", "text": "동정심을 얻는 전략을 검토합시다."},
+        ],
+        chunk_index=2,
+        total_chunks=2,
+        model="gemma4:e2b",
+        max_ctx=32768,
+        num_predict=8192,
+        num_gpu=None,
+        keep_alive="0",
+        max_retries=2,
+    )
+
+    assert parsed["title"] == "구간 2 원문 발화 보존"
+    assert "사과를 먼저 해야 합니다." in parsed["summary_md"]
+    assert "동정심을 얻는 전략" in parsed["summary_md"]
 
 
 def test_parse_section_response_prefixes_missing_heading() -> None:

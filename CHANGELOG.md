@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-05
+
+### 추가
+- **STT 오타 교정** 기능 (전사 후 자동 보정)
+  - 규칙 기반 치환: `TYPO_CORRECTION_RULES` (예: `오타1=정타1, 오타2=정타2`)
+  - Ollama AI 문맥 교정: `TYPO_CORRECTION_AI` (청크 단위)
+  - 환경변수: `TYPO_CORRECTION`, `TYPO_CORRECTION_RULES`, `TYPO_CORRECTION_AI`,
+    `TYPO_CORRECTION_AI_MODEL`, `TYPO_CORRECTION_AI_CHUNK_SIZE`
+  - `doctor.py` 진단에 오타 교정 설정 표시, 사전(dictionary) 단위 테스트 추가
+
+### 개선
+- 요약 실패 시 복구(fallback) 강화 — 청크 단위 부분 요약 등
+
+## [0.3.0] - 2026-06-05
+
+### 추가
+- 그누보드5 유지보수 API + 다중 타겟(G5_TARGETS) 동기화, 멱등성 강화
+
+### 개선
+- **ffmpeg**: PATH 자동 탐색·런타임 주입으로 whisperx `FFmpegNotFound` 해결, 출력 인코딩(cp949) 안전화
+- **GPU**: CUDA 가속을 환경 독립적 선택 옵션으로 정리(배포 대응), `doctor.py` GPU 안내 개선
+- **Ollama**: 요약 전 torch 메모리 해제, 스트림 끊김/멈춤 복구
+- 공개 배포 안전장치·설치 기본값 정비, CLI·검색 이식성 개선
+- 전용 venv(`.venv-meetingrec`) 안내, GitHub Social Preview 이미지
+
+### 문서
+- `metting` 잔여 오타 정리, 저장소명 변경(`metting_record` → `meeting_record`) 반영
+
 ## [0.2.0] - 2026-06-04
 
 ### 변경 (Breaking)

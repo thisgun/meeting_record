@@ -208,6 +208,13 @@ def check_config():
         ok(f"OLLAMA_TIMEOUT_SEC = {cfg.ollama_timeout_sec}")
         ok(f"OLLAMA_SUMMARY_CHUNK_SEC = {cfg.ollama_summary_chunk_sec}")
         ok(f"OLLAMA_MIN_FREE_RAM_GB = {cfg.ollama_min_free_ram_gib}")
+        ok(f"TYPO_CORRECTION = {1 if cfg.typo_correction_enabled else 0}")
+        if cfg.typo_correction_rules.strip():
+            ok("TYPO_CORRECTION_RULES", "설정됨")
+        ok(f"TYPO_CORRECTION_AI = {1 if cfg.typo_correction_ai_enabled else 0}")
+        if cfg.typo_correction_ai_enabled:
+            ok(f"TYPO_CORRECTION_AI_MODEL = {cfg.typo_correction_ai_model or cfg.ollama_model}")
+            ok(f"TYPO_CORRECTION_AI_CHUNK_SIZE = {cfg.typo_correction_ai_chunk_size}")
         ok(f"G5_API_BASE = {cfg.g5_api_base}")
     except Exception as e:
         fail("config 로드 실패", str(e))

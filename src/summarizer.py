@@ -205,7 +205,7 @@ def _parse_summary_response(
         )
     if min_summary_chars > 0 and len(summary_md) < min_summary_chars:
         raise SummaryParseError(
-            f"요약 본문이 너무 짧습니다 ({len(summary_md)}자). 긴 회의는 상세 요약이 필요합니다.",
+            f"요약 본문이 너무 짧습니다 ({len(summary_md)}자). 더 상세한 요약이 필요합니다.",
             raw=raw,
         )
     return {"title": title, "summary_md": summary_md}
@@ -394,7 +394,7 @@ def _max_chunk_input_tokens(max_ctx: int) -> int:
 
 
 def _chunk_min_summary_chars(transcript: str) -> int:
-    return min(700, max(250, len(transcript) // 2))
+    return min(600, max(250, len(transcript) // 3))
 
 
 def _split_utterances_for_summary(
@@ -607,24 +607,65 @@ def _summarize_chunk(
         num_predict=max(4096, min(num_predict, 8192)),
         num_gpu=num_gpu,
     )
-    parsed = _chat_json_with_retries(
-        client,
-        model=model,
-        messages=[
-            {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-        options=options,
-        keep_alive=keep_alive,
-        max_retries=max_retries,
-        parser=lambda raw: _parse_chunk_response(raw, min_summary_chars=min_chars),
-        label=f"구간 {chunk_index}/{total_chunks}",
-    )
+    try:
+        parsed = _chat_json_with_retries(
+            client,
+            model=model,
+            messages=[
+                {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            options=options,
+            keep_alive=keep_alive,
+            max_retries=max_retries,
+            parser=lambda raw: _parse_chunk_response(raw, min_summary_chars=min_chars),
+            label=f"구간 {chunk_index}/{total_chunks}",
+        )
+    except (SummaryParseError, RuntimeError) as e:
+        parsed = _fallback_chunk_summary(
+            chunk,
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+            time_range=time_range,
+            reason=str(e),
+        )
     return {
         "index": chunk_index,
         "time_range": time_range,
         "title": parsed["title"],
         "summary_md": parsed["summary_md"],
+    }
+
+
+def _fallback_chunk_summary(
+    chunk: list[dict],
+    *,
+    chunk_index: int,
+    total_chunks: int,
+    time_range: str,
+    reason: str,
+) -> dict:
+    import sys
+
+    sys.stdout.write(
+        f"    구간 {chunk_index}/{total_chunks} 요약이 불안정해서 원문 발화를 최종 재료로 보존합니다. "
+        f"({reason[:120]})\n"
+    )
+    sys.stdout.flush()
+
+    transcript = _format_transcript(chunk, include_time=True)
+    summary_md = (
+        "## 구간 개요\n"
+        f"- 이 구간({time_range})은 Ollama 구간 요약이 충분하지 않아 원문 발화를 최종 통합 재료로 보존했습니다.\n"
+        "- 아래 발화 목록을 기준으로 최종 회의록에서 논의 흐름, 결정 사항, 후속 조치를 판단해야 합니다.\n\n"
+        "## 핵심 발언과 근거\n"
+        f"{transcript}\n\n"
+        "## 결정·검토·후속 조치 후보\n"
+        "- 이 구간의 결정/후속 조치는 위 원문 발화를 바탕으로 최종 통합 단계에서 추출합니다."
+    )
+    return {
+        "title": f"구간 {chunk_index} 원문 발화 보존",
+        "summary_md": summary_md,
     }
 
 

@@ -31,6 +31,55 @@ def _print_step(n: int, total: int, msg: str) -> None:
     print(f"\n[{n}/{total}] {msg}", flush=True)
 
 
+def _print_speaker_hint(speaker_count: int) -> None:
+    if speaker_count > 2:
+        return
+    print(
+        "    ※ 다인원 회의인데 화자가 1~2명으로 뭉치면 "
+        "`--speakers 6` 또는 `.env`의 `WATCH_SPEAKERS=6`으로 화자 수를 강제하세요."
+    )
+    print("      STT 캐시가 있어도 화자만 다시 분리해서 캐시를 갱신합니다.")
+
+
+def _apply_typo_correction(cfg, segments: list[dict], *, cache_path: Path | None = None) -> list[dict]:
+    corrected, n_fixed = dictionary.apply_to_segments(
+        cfg.db_path,
+        segments,
+        enabled=cfg.typo_correction_enabled,
+        inline_rules=cfg.typo_correction_rules,
+    )
+    n_ai_fixed = 0
+    if cfg.typo_correction_enabled and cfg.typo_correction_ai_enabled:
+        ai_model = cfg.typo_correction_ai_model or cfg.ollama_model
+        try:
+            corrected, n_ai_fixed = dictionary.apply_ai_correction_to_segments(
+                corrected,
+                host=cfg.ollama_host,
+                model=ai_model,
+                timeout=cfg.ollama_timeout_sec,
+                keep_alive=cfg.ollama_keep_alive,
+                max_ctx=cfg.ollama_num_ctx_max,
+                chunk_size=cfg.typo_correction_ai_chunk_size,
+            )
+        except Exception as e:
+            print(f"    ⚠ AI 오타 보정 실패, 규칙 기반 결과로 계속 진행: {e}")
+
+    if n_fixed > 0:
+        source = "사전/오타 보정"
+        if cfg.typo_correction_rules.strip():
+            source += " (.env 규칙 포함)"
+        print(f"    → {source} 적용: {n_fixed}건")
+    if n_ai_fixed > 0:
+        print(f"    → AI 오타 보정 적용: {n_ai_fixed}건")
+    if n_fixed > 0 or n_ai_fixed > 0:
+        if cache_path is not None:
+            cache_path.write_text(
+                json.dumps(corrected, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"    → 보정 결과 캐시 갱신: {cache_path.name}")
+    return corrected
+
+
 def _utterance_for_comment(row: dict) -> dict:
     return {
         "speaker": row["speaker"],
@@ -164,7 +213,10 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         _print_step(2, total_steps,
                     f"발화 캐시 사용: {cache_path.name}")
         segments = json.loads(cache_path.read_text(encoding="utf-8"))
-        print(f"    → 발화 {len(segments)}건, 화자 {len({s['speaker'] for s in segments})}명 (캐시)")
+        segments = _apply_typo_correction(cfg, segments, cache_path=cache_path)
+        speaker_count = len({s['speaker'] for s in segments})
+        print(f"    → 발화 {len(segments)}건, 화자 {speaker_count}명 (캐시)")
+        _print_speaker_hint(speaker_count)
     elif rediarize_only:
         _print_step(2, total_steps,
                     f"화자 재분리 ({num_speakers}명 강제, STT 캐시 사용)")
@@ -184,11 +236,13 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         )
         segments = transcriber.remap_speakers(segments)
         segments = transcriber.merge_consecutive(segments)
+        segments = _apply_typo_correction(cfg, segments)
         # 캐시 덮어쓰기
         cache_path.write_text(
             json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        print(f"    → 발화 {len(segments)}건, 화자 {len({s['speaker'] for s in segments})}명 "
+        speaker_count = len({s['speaker'] for s in segments})
+        print(f"    → 발화 {len(segments)}건, 화자 {speaker_count}명 "
               f"({time.time()-t0:.1f}s, 캐시 갱신)")
     else:
         diarize_mode = "pyannote (HF)" if cfg.huggingface_token else "로컬 (speechbrain)"
@@ -212,10 +266,8 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
             vad_filter=cfg.whisper_vad_filter,
             initial_prompt=whisper_prompt,
         )
-        # STT 후 사전 치환 적용 (Whisper가 못 잡은 오류 자동 교정)
-        segments, n_fixed = dictionary.apply_to_segments(cfg.db_path, segments)
-        if n_fixed > 0:
-            print(f"    → 사전 치환 적용: {n_fixed}건")
+        # STT 후 사전/.env 치환 적용 (Whisper가 못 잡은 오류 자동 교정)
+        segments = _apply_typo_correction(cfg, segments)
         # PII 마스킹 (PII_MASK_LEVEL 설정 시)
         if pii.is_enabled():
             segments, n_masked = pii.mask_segments(segments)
@@ -227,8 +279,10 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         cache_path.write_text(
             json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        print(f"    → 발화 {len(segments)}건, 화자 {len({s['speaker'] for s in segments})}명 "
+        speaker_count = len({s['speaker'] for s in segments})
+        print(f"    → 발화 {len(segments)}건, 화자 {speaker_count}명 "
               f"({time.time()-t0:.1f}s, 캐시: {cache_path.name})")
+        _print_speaker_hint(speaker_count)
 
     # 3) 요약 — Ollama가 모델을 로드할 수 있도록 whisperx/pyannote 메모리 먼저 해제
     release_torch_memory("STT 후")
