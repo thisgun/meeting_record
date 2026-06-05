@@ -1,4 +1,6 @@
-from src.summarizer import _build_ollama_options
+import inspect
+
+from src.summarizer import _build_ollama_options, summarize
 
 
 def test_ollama_options_cap_context_for_low_memory() -> None:
@@ -21,3 +23,9 @@ def test_ollama_options_omit_num_gpu_when_auto() -> None:
 
     assert options["num_ctx"] == 4096
     assert "num_gpu" not in options
+
+
+def test_summarize_default_timeout_bounds_zombie_wait() -> None:
+    signature = inspect.signature(summarize)
+
+    assert signature.parameters["timeout"].default == 300.0

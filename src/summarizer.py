@@ -138,6 +138,12 @@ def _stream_chat(client, *, model, messages, options, format, keep_alive):
     import sys
     import time as _time
 
+    sys.stdout.write(
+        "    Ollama 응답 대기 중... 첫 실행/서버 재시작 직후에는 "
+        "모델 로딩으로 60~90초 동안 출력이 없을 수 있습니다.\n"
+    )
+    sys.stdout.flush()
+
     response_iter = client.chat(
         model=model,
         messages=messages,
@@ -168,6 +174,11 @@ def _stream_chat(client, *, model, messages, options, format, keep_alive):
         # 부분 결과를 보존하여 상위에 전달
         elapsed = int(_time.time() - start)
         sys.stdout.write(f"\r    스트림 중단 ({chunk_count}청크, {elapsed}s): {type(e).__name__}{' '*20}\n")
+        if chunk_count == 0:
+            sys.stdout.write(
+                "    첫 응답 전에 중단됨. 이전 stuck 이후 Ollama 서버 스케줄러가 "
+                "좀비 상태일 수 있습니다.\n"
+            )
         sys.stdout.flush()
         e._partial_content = "".join(parts)  # type: ignore[attr-defined]
         e._partial_chunks = chunk_count  # type: ignore[attr-defined]
@@ -183,7 +194,7 @@ def summarize(
     *,
     model: str = "gemma4:e2b",
     host: str = "http://127.0.0.1:11434",
-    timeout: float = 1800.0,
+    timeout: float = 300.0,
     keep_alive: str = "0",
     max_retries: int = 2,
     max_ctx: int = 32768,
@@ -260,6 +271,13 @@ def summarize(
                 sys.stdout.flush()
                 content = last_partial
 
+    if last_error is not None and not content.strip() and not last_partial:
+        raise RuntimeError(
+            "Ollama가 첫 응답을 보내지 못했습니다. 이전 stuck 이후 서버 스케줄러가 "
+            f"좀비 상태일 수 있습니다. 'ollama stop {model}' 또는 Ollama 재시작 후 "
+            "다시 실행하세요. STT 캐시가 있으면 다음 실행은 요약 단계부터 이어집니다."
+        ) from last_error
+
     try:
         data = _extract_json(content)
     except (ValueError, json.JSONDecodeError) as e:
@@ -267,6 +285,13 @@ def summarize(
         err_msg = f"_요약 파싱 실패: {e}_"
         if last_error is not None:
             err_msg += f"\n\n_원인: {type(last_error).__name__}: {last_error}_"
+            if not last_partial and getattr(last_error, "_partial_chunks", 0) == 0:
+                err_msg += (
+                    "\n\n_Ollama가 첫 응답을 보내지 못했습니다. 이전 stuck 이후 "
+                    "Ollama 서버 스케줄러가 좀비 상태일 수 있습니다. "
+                    "`ollama stop <모델명>` 또는 Ollama 재시작 후 다시 실행하세요. "
+                    "STT 캐시가 있으면 다음 실행은 요약 단계부터 이어집니다._"
+                )
         return {
             "title": "회의록 (자동 생성 실패)",
             "summary_md": f"{err_msg}\n\n원본 응답:\n\n{content}",

@@ -252,15 +252,25 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         return 5
     _print_step(3, total_steps, f"회의 요약 (Ollama {cfg.ollama_model})")
     t0 = time.time()
-    summary = summarizer.summarize(
-        segments,
-        model=cfg.ollama_model,
-        host=cfg.ollama_host,
-        keep_alive=cfg.ollama_keep_alive,
-        max_ctx=cfg.ollama_num_ctx_max,
-        num_predict=cfg.ollama_num_predict,
-        num_gpu=cfg.ollama_num_gpu,
-    )
+    try:
+        summary = summarizer.summarize(
+            segments,
+            model=cfg.ollama_model,
+            host=cfg.ollama_host,
+            timeout=cfg.ollama_timeout_sec,
+            keep_alive=cfg.ollama_keep_alive,
+            max_ctx=cfg.ollama_num_ctx_max,
+            num_predict=cfg.ollama_num_predict,
+            num_gpu=cfg.ollama_num_gpu,
+        )
+    except Exception as e:
+        print(f"[error] Ollama 요약 실패: {e}", file=sys.stderr)
+        print(
+            f"[error] STT 결과 캐시는 저장되어 있습니다: {cache_path.name}. "
+            f"'ollama stop {cfg.ollama_model}' 또는 Ollama 재시작 후 다시 실행하세요.",
+            file=sys.stderr,
+        )
+        return 5
     # 요약 본문에도 마스킹 (LLM이 발화의 번호를 그대로 옮길 가능성)
     if pii.is_enabled():
         summary["summary_md"] = pii.mask_text(summary["summary_md"])

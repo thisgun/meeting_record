@@ -381,6 +381,7 @@ OLLAMA_KEEP_ALIVE=0
 OLLAMA_NUM_CTX_MAX=32768
 OLLAMA_NUM_PREDICT=8192
 OLLAMA_NUM_GPU=
+OLLAMA_TIMEOUT_SEC=300
 OLLAMA_MIN_FREE_RAM_GB=4
 OLLAMA_MEMORY_WAIT_SEC=30
 
@@ -1085,6 +1086,11 @@ python watcher.py --no-upload
 3. STT → 화자 분리 → 요약 → DB → 그누보드5 업로드까지 자동 처리
 4. 처리 결과는 콘솔 + `data\watch.log`에 기록
 
+**Ollama 대기 동작**
+- watcher를 다시 켠 직후 첫 요약은 `gemma4:e2b` 콜드 로딩 때문에 step 3에서 60~90초 동안 출력이 없을 수 있습니다. 이후 `생성 중... N청크`가 보이면 정상입니다.
+- `OLLAMA_TIMEOUT_SEC` 동안 첫 청크가 전혀 없으면 실패로 처리합니다. 이전 stuck 이후 Ollama 서버 스케줄러가 좀비 상태일 수 있으므로 `ollama stop gemma4:e2b` 또는 Ollama 재시작 후 `python watcher.py`를 다시 실행하세요.
+- 메모리 여유가 충분하고 연속 파일 처리 속도가 중요하면 `OLLAMA_KEEP_ALIVE=10m`처럼 모델을 잠시 유지할 수 있습니다. RTX 3050 4GB/저메모리 환경에서는 기본값 `0`이 더 안전합니다.
+
 **핵심 설정 (`.env`)**:
 ```
 WATCH_DIR=./data/watch          # 감시할 폴더
@@ -1149,8 +1155,8 @@ ffmpeg -version
 **원인 B**: STT 처리 중 CPU 100% 점유로 Ollama가 일시적으로 응답 못함.
 
 **해결**:
-- `summarizer.py`가 timeout 600초로 호출
-- STT 시작 전 Ollama warmup으로 모델 메모리 적재
+- `summarizer.py`가 `OLLAMA_TIMEOUT_SEC` 동안 첫 토큰/다음 청크를 기다린 뒤 실패 처리
+- step 3에서 처음 60~90초 출력이 없는 것은 모델 콜드 로딩이면 정상
 - 발화 캐시(`*.{파일지문}.segments.json`) 덕분에 실패해도 재실행 시 STT 안 다시 함
 
 ### 문제 4: "OSError [WinError 1314] symlink 권한 부족"
@@ -1241,6 +1247,28 @@ WHISPER_BATCH_SIZE=4
 # 마지막 수단: 더 작은 LLM 사용
 # OLLAMA_MODEL=qwen3:4b
 ```
+
+### 문제 9: watcher 재실행 후에도 새 chat 요청이 계속 대기함
+
+**증상**: 메모리 정리 로그는 정상 출력되고, Python 워커도 `chat()` 호출까지 갔지만
+`생성 중...` 청크가 전혀 나오지 않습니다. 첫 stuck 이후 Ollama 서버 내부 스케줄러에
+잔존 상태가 남아 새 요청이 계속 대기하는 좀비 상태일 수 있습니다.
+
+**정상 대기와 구분**:
+- 정상: `python watcher.py` 재실행 후 첫 요약에서 60~90초 정도 조용하다가 `생성 중... N청크`가 출력됨
+- 비정상: `OLLAMA_TIMEOUT_SEC`가 지날 때까지 첫 청크가 전혀 없고 요약 실패로 종료됨
+
+**해결**:
+```powershell
+ollama stop gemma4:e2b
+# 그래도 안 풀리면 Ollama 앱/서비스 재시작 후
+python watcher.py
+```
+
+이미 STT 캐시가 저장된 파일은 다음 실행 때 발화 캐시를 사용하므로 WhisperX를 다시 돌리지
+않고 요약 단계부터 이어갈 수 있습니다. 메모리 여유가 충분한 PC에서 연속 파일 처리 속도가
+중요하면 `OLLAMA_KEEP_ALIVE=10m`처럼 모델을 잠시 유지할 수 있지만, 저메모리 환경에서는
+`OLLAMA_KEEP_ALIVE=0`을 유지하세요.
 
 ---
 

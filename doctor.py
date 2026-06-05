@@ -205,6 +205,7 @@ def check_config():
         ok(f"OLLAMA_NUM_CTX_MAX = {cfg.ollama_num_ctx_max}")
         ok(f"OLLAMA_NUM_PREDICT = {cfg.ollama_num_predict}")
         ok(f"OLLAMA_NUM_GPU = {cfg.ollama_num_gpu if cfg.ollama_num_gpu is not None else '(auto)'}")
+        ok(f"OLLAMA_TIMEOUT_SEC = {cfg.ollama_timeout_sec}")
         ok(f"OLLAMA_MIN_FREE_RAM_GB = {cfg.ollama_min_free_ram_gib}")
         ok(f"G5_API_BASE = {cfg.g5_api_base}")
     except Exception as e:

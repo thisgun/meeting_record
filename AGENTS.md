@@ -71,6 +71,7 @@ php -l g5_meeting_api/plugin/meeting_api/파일명.php
 - STT 이후 Ollama 호출 전에는 `src.runtime_memory.release_torch_memory()`와 free RAM 확인 흐름을 유지합니다.
 - `gemma4:e2b`는 기본 안내 모델이지만, 모든 환경에서 GPU 적재가 된다는 뜻은 아닙니다. RAM/VRAM 부족 상황에서는 `OLLAMA_NUM_CTX_MAX`, `OLLAMA_NUM_PREDICT`, `WHISPER_BATCH_SIZE`, `OLLAMA_MIN_FREE_RAM_GB`를 조정할 수 있어야 합니다.
 - `OLLAMA_KEEP_ALIVE=0` 기본 의도는 요약 후 모델을 붙잡지 않고 메모리를 돌려주는 것입니다. 변경 시 저메모리 영향을 고려합니다.
+- Ollama가 첫 청크를 보내지 못하고 대기하면 메모리 문제가 아니라 서버 스케줄러 좀비 상태일 수 있습니다. `OLLAMA_TIMEOUT_SEC`, `ollama stop <model>`, Ollama 재시작 안내를 함께 고려합니다.
 - `OLLAMA_NUM_GPU=999`처럼 GPU 레이어를 과하게 강제하는 설정은 저VRAM 환경에서 위험합니다.
 
 ## Repository Map
