@@ -107,6 +107,27 @@ def check_nvidia():
         fail("nvidia-smi 호출 실패", str(e))
 
 
+def check_memory():
+    section("메모리")
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from config import load_config
+        from src.runtime_memory import format_snapshot, release_torch_memory
+
+        cfg = load_config()
+        snap = release_torch_memory(verbose=False)
+        detail = format_snapshot(snap)
+        if snap.ram_available_gib is not None and snap.ram_available_gib < cfg.ollama_min_free_ram_gib:
+            warn(
+                "Ollama 실행 전 여유 RAM 부족",
+                f"{detail}; 권장 {cfg.ollama_min_free_ram_gib:.1f} GiB 이상",
+            )
+        else:
+            ok("현재 메모리", detail)
+    except Exception as e:
+        warn("메모리 확인 실패", str(e)[:120])
+
+
 def check_ffmpeg():
     section("FFmpeg")
     # 파이프라인(src/audio.py)과 동일한 탐색 로직 사용 — PATH에 없어도
@@ -180,6 +201,11 @@ def check_config():
         ok(f"WHISPER_COMPUTE_TYPE = {cfg.whisper_compute_type}")
         ok(f"OLLAMA_MODEL = {cfg.ollama_model}")
         ok(f"OLLAMA_HOST = {cfg.ollama_host}")
+        ok(f"OLLAMA_KEEP_ALIVE = {cfg.ollama_keep_alive}")
+        ok(f"OLLAMA_NUM_CTX_MAX = {cfg.ollama_num_ctx_max}")
+        ok(f"OLLAMA_NUM_PREDICT = {cfg.ollama_num_predict}")
+        ok(f"OLLAMA_NUM_GPU = {cfg.ollama_num_gpu if cfg.ollama_num_gpu is not None else '(auto)'}")
+        ok(f"OLLAMA_MIN_FREE_RAM_GB = {cfg.ollama_min_free_ram_gib}")
         ok(f"G5_API_BASE = {cfg.g5_api_base}")
     except Exception as e:
         fail("config 로드 실패", str(e))
@@ -316,7 +342,7 @@ def check_packages():
     section("Python 핵심 패키지")
     deps = ["whisperx", "faster_whisper", "torch", "torchaudio",
             "speechbrain", "sklearn", "soundfile", "ollama",
-            "dotenv", "watchdog", "docx", "streamlit", "huggingface_hub"]
+            "dotenv", "psutil", "watchdog", "docx", "streamlit", "huggingface_hub"]
     for d in deps:
         try:
             mod = __import__(d)
@@ -337,6 +363,7 @@ def main() -> int:
     check_python()
     check_pytorch()
     check_nvidia()
+    check_memory()
     check_ffmpeg()
     check_packages()
     check_models()

@@ -333,6 +333,7 @@ ollama            # Ollama Python 클라이언트
 requests          # HTTP 호출 (그누보드5 API)
 python-dotenv     # .env 파일 로드
 pydub             # 오디오 메타데이터
+psutil            # RAM/VRAM 진단 및 저메모리 안전장치
 ```
 
 설치 명령:
@@ -376,6 +377,12 @@ HUGGINGFACE_TOKEN=
 # Ollama 설정
 OLLAMA_HOST=http://127.0.0.1:11434
 OLLAMA_MODEL=gemma4:e2b
+OLLAMA_KEEP_ALIVE=0
+OLLAMA_NUM_CTX_MAX=32768
+OLLAMA_NUM_PREDICT=8192
+OLLAMA_NUM_GPU=
+OLLAMA_MIN_FREE_RAM_GB=4
+OLLAMA_MEMORY_WAIT_SEC=30
 
 # Whisper 설정
 WHISPER_MODEL=small              # tiny/base/small/medium/large-v3
@@ -467,6 +474,29 @@ python main.py --help
 | **`gemma4:e2b`** | **7.7GB** | **~30분** | **매우 좋음** (기본값) |
 | `gemma4:e4b` | 9.6GB | 30분+ (긴 context 불가) | 짧은 회의만 |
 
+`gemma4:e2b`가 기본값입니다. 다만 RTX 3050 Laptop 4GB처럼 VRAM이 작은 환경에서는
+모델 전체를 GPU에 올릴 수 없고, CPU fallback도 free RAM이 부족하면 멈춘 것처럼 보일 수
+있습니다. 이 프로젝트는 STT/화자분리 직후 WhisperX, pyannote, speechbrain 캐시를 정리한
+뒤 free RAM이 `OLLAMA_MIN_FREE_RAM_GB`보다 낮으면 Ollama 호출을 시작하지 않습니다. 이때
+STT 캐시는 남으므로 메모리를 비우고 다시 실행하면 요약 단계부터 이어갈 수 있습니다.
+
+저메모리 환경 권장값:
+
+```env
+OLLAMA_MODEL=gemma4:e2b
+OLLAMA_KEEP_ALIVE=0
+OLLAMA_NUM_CTX_MAX=8192      # 긴 회의면 16384, 안정성 우선이면 8192
+OLLAMA_NUM_PREDICT=4096
+OLLAMA_MIN_FREE_RAM_GB=6     # gemma4:e2b는 4GB보다 6~8GB 권장
+# GPU offload가 계속 실패하면 CPU만 사용. 단, free RAM이 충분해야 합니다.
+# OLLAMA_NUM_GPU=0
+# 4GB VRAM에서는 OLLAMA_NUM_GPU=999 같은 전체 GPU 강제 값을 쓰지 마세요.
+WHISPER_BATCH_SIZE=4
+```
+
+요약 품질보다 안정성이 더 중요하거나 free RAM 확보가 어렵다면 `qwen3:4b` 같은 더 작은
+모델을 먼저 사용해 보세요.
+
 #### 추천 조합 (107분 회의 기준)
 
 | 우선순위 | Whisper | LLM | 총 예상 시간 |
@@ -533,6 +563,7 @@ python main.py "회의.mp3"   # [info] DEVICE=cuda, compute_type=float16 출력
 **GPU 권장 사양**
 | GPU | VRAM | 권장 Whisper | 처리 시간 (107분 회의) |
 |-----|------|-------------|----------------------|
+| RTX 3050 Laptop | 4GB | small, batch 4~8 | STT는 가능, LLM은 free RAM 확보 필요 |
 | GTX 1660 / RTX 2060 | 6GB | small | ~10분 |
 | RTX 3060 12GB | 12GB | medium | ~7분 |
 | RTX 4070 / 3080 | 12GB | large-v3 | ~6분 |
@@ -1166,7 +1197,50 @@ CREATE TABLE g5_write_meeting LIKE g5_write_free;
 
 **원인**: 기본 Ollama context window가 4096 토큰. 긴 회의는 입력이 잘림.
 
-**해결 (이미 적용됨)**: `summarizer.py`가 transcript 길이를 보고 동적으로 num_ctx를 4096~128K 범위에서 자동 조정.
+**해결 (이미 적용됨)**: `summarizer.py`가 transcript 길이를 보고 동적으로 num_ctx를
+4096~`OLLAMA_NUM_CTX_MAX` 범위에서 자동 조정합니다. 기본값은 32768이며, 메모리가 부족한
+PC에서는 `.env`에서 낮출 수 있습니다.
+
+```env
+OLLAMA_NUM_CTX_MAX=8192
+OLLAMA_NUM_PREDICT=4096
+```
+
+### 문제 8: Ollama가 `GPULayers:[]` 이후 멈춘 것처럼 보임
+
+**원인**: WhisperX, pyannote, speechbrain 모델이 같은 Python 프로세스에서 RAM/VRAM을
+붙잡고 있는 상태에서 Ollama가 `gemma4:e2b` 같은 큰 모델을 로드하려고 하면 GPU 적재 실패
+후 CPU fallback도 메모리 부족으로 진행이 멈출 수 있습니다. RTX 3050 Laptop 4GB 환경에서
+특히 자주 발생합니다.
+
+**해결 (이미 적용됨)**:
+- STT/화자분리 직후 WhisperX, pyannote, speechbrain 캐시와 CUDA 캐시를 정리합니다.
+- Ollama 호출 전 free RAM이 `OLLAMA_MIN_FREE_RAM_GB`보다 낮으면 요약을 시작하지 않고
+  STT 캐시만 남긴 뒤 종료합니다.
+- `.env`에서 `OLLAMA_KEEP_ALIVE=0`으로 요약 후 Ollama 모델을 바로 해제합니다.
+
+권장 조치:
+
+```powershell
+python doctor.py
+```
+
+`Ollama 실행 전 여유 RAM 부족`이 보이면 브라우저, IDE, 다른 Python 프로세스, 기존
+Ollama 모델을 종료한 뒤 다시 실행하세요.
+
+```powershell
+ollama stop gemma4:e2b
+```
+
+그래도 부족하면 `.env`에서 다음처럼 낮춥니다.
+
+```env
+OLLAMA_NUM_CTX_MAX=8192
+OLLAMA_NUM_PREDICT=4096
+WHISPER_BATCH_SIZE=4
+# 마지막 수단: 더 작은 LLM 사용
+# OLLAMA_MODEL=qwen3:4b
+```
 
 ---
 

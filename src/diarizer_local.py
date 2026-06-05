@@ -9,6 +9,7 @@ speechbrain의 ECAPA-TDNN 화자 임베딩 + scikit-learn AgglomerativeClusterin
 """
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,23 @@ class LocalDiarizeError(RuntimeError):
 
 
 _ENCODER_CACHE = {}
+
+
+def clear_encoder_cache() -> None:
+    """speechbrain encoder singleton cache를 비워 다음 LLM 단계 메모리를 확보."""
+    _ENCODER_CACHE.clear()
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _get_encoder(savedir: str = "./data/models/spkrec-ecapa-voxceleb", device: str = "cpu"):

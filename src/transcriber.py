@@ -8,10 +8,11 @@
 """
 from __future__ import annotations
 
-import gc
 import os
 from pathlib import Path
 from typing import Optional
+
+from src.runtime_memory import release_torch_memory
 
 
 class TranscribeError(RuntimeError):
@@ -96,8 +97,10 @@ def transcribe_only(
     model = whisperx.load_model(resolved, **model_kwargs)
     result = model.transcribe(audio, batch_size=batch_size, language=language)
     del model
-    gc.collect()
+    release_torch_memory("Whisper 모델 해제", verbose=False)
 
+    align_model = None
+    metadata = None
     try:
         # 한국어 align 모델 로컬 경로 우선
         align_kwargs = {"language_code": language, "device": device}
@@ -110,10 +113,12 @@ def transcribe_only(
             result["segments"], align_model, metadata, audio, device,
             return_char_alignments=False,
         )
-        del align_model
-        gc.collect()
     except Exception as e:
         print(f"[warn] align 실패, segment 단위로 진행: {e}")
+    finally:
+        del align_model
+        del metadata
+        release_torch_memory("Align 모델 해제", verbose=False)
 
     return audio, result
 
@@ -134,14 +139,21 @@ def _diarize_pyannote(
     except ImportError:
         from whisperx import DiarizationPipeline  # 구버전 호환
 
-    pipeline = DiarizationPipeline(use_auth_token=hf_token, device=device)
-    kwargs = {}
-    if min_speakers is not None:
-        kwargs["min_speakers"] = min_speakers
-    if max_speakers is not None:
-        kwargs["max_speakers"] = max_speakers
-    diarize_segments = pipeline(audio, **kwargs)
-    return whisperx.assign_word_speakers(diarize_segments, result)
+    pipeline = None
+    diarize_segments = None
+    try:
+        pipeline = DiarizationPipeline(use_auth_token=hf_token, device=device)
+        kwargs = {}
+        if min_speakers is not None:
+            kwargs["min_speakers"] = min_speakers
+        if max_speakers is not None:
+            kwargs["max_speakers"] = max_speakers
+        diarize_segments = pipeline(audio, **kwargs)
+        return whisperx.assign_word_speakers(diarize_segments, result)
+    finally:
+        del diarize_segments
+        del pipeline
+        release_torch_memory("pyannote 모델 해제", verbose=False)
 
 
 def _segments_from_result(result: dict) -> list[dict]:
@@ -188,45 +200,52 @@ def transcribe_and_diarize(
     Returns:
         [{"start": float, "end": float, "speaker": str, "text": str}, ...]
     """
-    audio, result = transcribe_only(
-        wav_path,
-        model_name=model_name,
-        language=language,
-        compute_type=compute_type,
-        device=device,
-        cpu_threads=cpu_threads,
-        batch_size=batch_size,
-        vad_filter=vad_filter,
-        initial_prompt=initial_prompt,
-    )
-
-    if hf_token:
-        # pyannote 경로
-        try:
-            result = _diarize_pyannote(
-                audio, result, hf_token,
-                device=device,
-                min_speakers=min_speakers,
-                max_speakers=max_speakers,
-            )
-            return _segments_from_result(result)
-        except Exception as e:
-            print(f"[warn] pyannote diarization 실패 → 로컬 fallback: {e}")
-
-    # 로컬 fallback (HF 토큰 없거나 pyannote 실패)
-    print("[info] 로컬 화자 분리 사용 (speechbrain ECAPA-TDNN)")
-    segments = _segments_from_result(result)
+    audio = None
+    result = None
     try:
-        from src.diarizer_local import diarize_local
-    except ImportError:
-        from diarizer_local import diarize_local  # 모듈 단독 실행 호환
-    return diarize_local(
-        wav_path, segments,
-        num_speakers=num_speakers,
-        enrollment_db=enrollment_db,
-        enrollment_threshold=enrollment_threshold,
-        device=device,
-    )
+        audio, result = transcribe_only(
+            wav_path,
+            model_name=model_name,
+            language=language,
+            compute_type=compute_type,
+            device=device,
+            cpu_threads=cpu_threads,
+            batch_size=batch_size,
+            vad_filter=vad_filter,
+            initial_prompt=initial_prompt,
+        )
+
+        if hf_token:
+            # pyannote 경로
+            try:
+                result = _diarize_pyannote(
+                    audio, result, hf_token,
+                    device=device,
+                    min_speakers=min_speakers,
+                    max_speakers=max_speakers,
+                )
+                return _segments_from_result(result)
+            except Exception as e:
+                print(f"[warn] pyannote diarization 실패 → 로컬 fallback: {e}")
+
+        # 로컬 fallback (HF 토큰 없거나 pyannote 실패)
+        print("[info] 로컬 화자 분리 사용 (speechbrain ECAPA-TDNN)")
+        segments = _segments_from_result(result)
+        try:
+            from src.diarizer_local import diarize_local
+        except ImportError:
+            from diarizer_local import diarize_local  # 모듈 단독 실행 호환
+        return diarize_local(
+            wav_path, segments,
+            num_speakers=num_speakers,
+            enrollment_db=enrollment_db,
+            enrollment_threshold=enrollment_threshold,
+            device=device,
+        )
+    finally:
+        del audio
+        del result
+        release_torch_memory("STT/화자 분리 반환 전", verbose=False)
 
 
 def remap_speakers(segments: list[dict], prefix: str = "사용자") -> list[dict]:

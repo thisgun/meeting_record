@@ -103,6 +103,32 @@ def _extract_json(raw: str) -> dict:
     return {"title": title_m.group(1).strip(), "summary_md": md.strip()}
 
 
+def _build_ollama_options(
+    transcript: str,
+    *,
+    max_ctx: int = 32768,
+    num_predict: int = 8192,
+    num_gpu: int | None = None,
+) -> dict:
+    """Build memory-aware Ollama options from transcript length."""
+    max_ctx = max(4096, int(max_ctx))
+    num_predict = max(1024, int(num_predict))
+
+    # 긴 회의 대비: context window를 토큰 추정치에 따라 동적 설정
+    # 한국어는 평균 ~2.5자/토큰 → transcript 문자수 × 0.4 토큰 추정 + 여유
+    approx_tokens = int(len(transcript) * 0.5) + 2048
+    num_ctx = min(max_ctx, max(4096, ((approx_tokens // 1024) + 1) * 1024))
+
+    options = {
+        "temperature": 0.2,
+        "num_ctx": num_ctx,
+        "num_predict": num_predict,
+    }
+    if num_gpu is not None:
+        options["num_gpu"] = int(num_gpu)
+    return options
+
+
 def _stream_chat(client, *, model, messages, options, format, keep_alive):
     """Ollama 스트리밍 1회 시도. (content, chunk_count, elapsed_sec) 반환.
 
@@ -158,8 +184,11 @@ def summarize(
     model: str = "gemma4:e2b",
     host: str = "http://127.0.0.1:11434",
     timeout: float = 1800.0,
-    keep_alive: str = "60m",
+    keep_alive: str = "0",
     max_retries: int = 2,
+    max_ctx: int = 32768,
+    num_predict: int = 8192,
+    num_gpu: int | None = None,
 ) -> dict:
     """발화 리스트를 받아 {title, summary_md} 반환."""
     try:
@@ -173,11 +202,6 @@ def summarize(
     transcript = _format_transcript(utterances)
     client = Client(host=host, timeout=timeout)
 
-    # 긴 회의 대비: context window를 토큰 추정치에 따라 동적 설정
-    # 한국어는 평균 ~2.5자/토큰 → transcript 문자수 × 0.4 토큰 추정 + 여유
-    approx_tokens = int(len(transcript) * 0.5) + 2048
-    num_ctx = min(131072, max(4096, ((approx_tokens // 1024) + 1) * 1024))
-
     user_msg = (
         "다음 회의 대화를 **풍성하고 구체적으로** 정리해 주십시오. "
         "각 섹션은 짧게 끝내지 말고 충실히 채우고, 회의에서 언급된 모든 안건/사례/정책/인물/숫자를 빠짐없이 포함하세요. "
@@ -190,11 +214,12 @@ def summarize(
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_msg},
     ]
-    options = {
-        "temperature": 0.2,
-        "num_ctx": num_ctx,
-        "num_predict": 16384,
-    }
+    options = _build_ollama_options(
+        transcript,
+        max_ctx=max_ctx,
+        num_predict=num_predict,
+        num_gpu=num_gpu,
+    )
 
     import sys
     import time as _time

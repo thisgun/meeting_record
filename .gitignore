@@ -38,3 +38,4 @@ build/
 
 # PHP 운영 토큰 (절대 commit 금지)
 g5_meeting_api/plugin/meeting_api/config.local.php
+AGENTS.md

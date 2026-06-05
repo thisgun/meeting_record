@@ -24,42 +24,11 @@ from src.g5_client import (
     format_utterance_comment,
     legacy_default_target_name,
 )
+from src.runtime_memory import format_snapshot, release_torch_memory, wait_for_min_free_ram
 
 
 def _print_step(n: int, total: int, msg: str) -> None:
     print(f"\n[{n}/{total}] {msg}", flush=True)
-
-
-def _release_torch_memory(label: str = "") -> None:
-    """Whisperx/pyannote가 점유한 RAM/VRAM을 적극적으로 회수.
-
-    Ollama가 같은 머신에서 모델을 로드해야 하므로 트랜스크립션 직후
-    호출. CUDA empty_cache는 PyTorch가 풀어두지 않은 캐시 영역까지 해제.
-    """
-    import gc
-
-    for _ in range(3):
-        gc.collect()
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            try:
-                torch.cuda.ipc_collect()
-            except Exception:
-                pass
-    except ImportError:
-        pass
-
-    try:
-        import psutil
-        vm = psutil.virtual_memory()
-        msg = f"    → 메모리 정리 완료 (free RAM: {vm.available/1024/1024/1024:.1f} GiB)"
-        if label:
-            msg = f"    → 메모리 정리 ({label}) — free RAM: {vm.available/1024/1024/1024:.1f} GiB"
-        print(msg, flush=True)
-    except ImportError:
-        print("    → 메모리 정리 완료", flush=True)
 
 
 def _utterance_for_comment(row: dict) -> dict:
@@ -262,11 +231,35 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
               f"({time.time()-t0:.1f}s, 캐시: {cache_path.name})")
 
     # 3) 요약 — Ollama가 모델을 로드할 수 있도록 whisperx/pyannote 메모리 먼저 해제
-    _release_torch_memory("STT 후")
+    release_torch_memory("STT 후")
+    memory_ok, memory_snapshot = wait_for_min_free_ram(
+        cfg.ollama_min_free_ram_gib,
+        timeout_sec=cfg.ollama_memory_wait_sec,
+    )
+    if not memory_ok:
+        print(
+            "[error] Ollama 모델을 로드하기에 메모리가 부족합니다: "
+            f"{format_snapshot(memory_snapshot)} "
+            f"(필요 free RAM {cfg.ollama_min_free_ram_gib:.1f} GiB 이상)",
+            file=sys.stderr,
+        )
+        print(
+            f"[error] STT 결과 캐시는 저장되어 있습니다: {cache_path.name}. "
+            "브라우저/IDE/다른 Python 프로세스를 종료하거나 "
+            "OLLAMA_MODEL을 더 작은 모델로 낮춘 뒤 다시 실행하세요.",
+            file=sys.stderr,
+        )
+        return 5
     _print_step(3, total_steps, f"회의 요약 (Ollama {cfg.ollama_model})")
     t0 = time.time()
     summary = summarizer.summarize(
-        segments, model=cfg.ollama_model, host=cfg.ollama_host
+        segments,
+        model=cfg.ollama_model,
+        host=cfg.ollama_host,
+        keep_alive=cfg.ollama_keep_alive,
+        max_ctx=cfg.ollama_num_ctx_max,
+        num_predict=cfg.ollama_num_predict,
+        num_gpu=cfg.ollama_num_gpu,
     )
     # 요약 본문에도 마스킹 (LLM이 발화의 번호를 그대로 옮길 가능성)
     if pii.is_enabled():

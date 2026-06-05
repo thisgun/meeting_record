@@ -17,6 +17,7 @@ ollama>=0.3.0
 requests>=2.31.0
 python-dotenv>=1.0.0
 pydub>=0.25.1
+psutil>=5.9.0
 
 # UI / export / analysis
 streamlit>=1.50.0
