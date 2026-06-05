@@ -38,4 +38,7 @@ build/
 
 # PHP 운영 토큰 (절대 commit 금지)
 g5_meeting_api/plugin/meeting_api/config.local.php
+
+# 로컬 전용 에이전트 메모 (개인 환경/미해결 과제 포함 — 공개 금지)
 AGENTS.md
+CLAUDE.local.md
