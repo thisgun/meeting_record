@@ -23,6 +23,10 @@ define('meeting_API_DEBUG', false);
 // setup_board.php를 실행할 때만 true로 바꾸고, 실행 후 false로 되돌리거나 파일을 삭제하세요.
 // define('meeting_API_ALLOW_SETUP', true);
 
+// 선택: API 호출을 허용할 IP/CIDR 목록. 비워두면 IP 제한 없음.
+// 예: 집/사무실 고정 IP 또는 서버 간 통신 IP만 허용
+// define('meeting_API_ALLOWED_IPS', '127.0.0.1,203.0.113.10,203.0.113.0/24');
+
 // 회원으로 작성하려면 mb_id 지정 (운영 환경 권장)
 // define('meeting_MB_ID', 'admin');
 // define('meeting_WR_NAME', '회의록 자동 등록');

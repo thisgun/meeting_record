@@ -97,6 +97,7 @@ jobs:
             echo "3. 그 폴더를 그누보드5의 \`plugin/\` 안에 FTP 업로드"
             echo "4. \`config.local.php.example\` → \`config.local.php\` 복사 후 토큰 설정"
             echo "   - \`setup_board.php\` 실행 시에만 \`meeting_API_ALLOW_SETUP=true\` 설정"
+            echo "   - 선택: \`meeting_API_ALLOWED_IPS\`로 Python 실행 PC/서버 IP만 허용"
             echo "5. \`curl -X POST -H \"X-API-Token: YOUR_TOKEN\" https://YOUR-DOMAIN/<gnuboard폴더>/plugin/meeting_api/setup_board.php\` 1회 호출"
             echo "6. \`meeting_API_ALLOW_SETUP=false\`로 되돌리거나 \`setup_board.php\` 삭제"
             echo ""

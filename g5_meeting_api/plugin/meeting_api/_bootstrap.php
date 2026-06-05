@@ -53,12 +53,91 @@ function require_method($expected) {
     }
 }
 
+function meeting_client_ip() {
+    return trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+}
+
+function meeting_ip_matches_cidr($ip, $cidr) {
+    $parts = explode('/', $cidr, 2);
+    if (count($parts) !== 2) {
+        return false;
+    }
+    $network = trim($parts[0]);
+    $prefix = trim($parts[1]);
+    if ($network === '' || $prefix === '' || !ctype_digit($prefix)) {
+        return false;
+    }
+    $ip_bin = @inet_pton($ip);
+    $network_bin = @inet_pton($network);
+    if ($ip_bin === false || $network_bin === false || strlen($ip_bin) !== strlen($network_bin)) {
+        return false;
+    }
+    $prefix_bits = (int)$prefix;
+    $max_bits = strlen($ip_bin) * 8;
+    if ($prefix_bits < 0 || $prefix_bits > $max_bits) {
+        return false;
+    }
+    $full_bytes = intdiv($prefix_bits, 8);
+    $remaining_bits = $prefix_bits % 8;
+    if ($full_bytes > 0 && substr($ip_bin, 0, $full_bytes) !== substr($network_bin, 0, $full_bytes)) {
+        return false;
+    }
+    if ($remaining_bits === 0) {
+        return true;
+    }
+    $mask = (0xff << (8 - $remaining_bits)) & 0xff;
+    return (ord($ip_bin[$full_bytes]) & $mask) === (ord($network_bin[$full_bytes]) & $mask);
+}
+
+function meeting_ip_matches_rule($ip, $rule) {
+    $ip = trim((string)$ip);
+    $rule = trim((string)$rule);
+    if ($ip === '' || $rule === '') {
+        return false;
+    }
+    if ($rule === '*') {
+        return true;
+    }
+    if (strpos($rule, '/') !== false) {
+        return meeting_ip_matches_cidr($ip, $rule);
+    }
+    $ip_bin = @inet_pton($ip);
+    $rule_bin = @inet_pton($rule);
+    return $ip_bin !== false && $rule_bin !== false && hash_equals($rule_bin, $ip_bin);
+}
+
+function meeting_ip_allowed($ip, $rules) {
+    $rules = trim((string)$rules);
+    if ($rules === '') {
+        return true;
+    }
+    foreach (explode(',', $rules) as $rule) {
+        if (meeting_ip_matches_rule($ip, $rule)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function meeting_require_allowed_ip() {
+    $rules = defined('meeting_API_ALLOWED_IPS') ? (string)meeting_API_ALLOWED_IPS : '';
+    if ($rules === '') {
+        return;
+    }
+    $ip = meeting_client_ip();
+    if (!meeting_ip_allowed($ip, $rules)) {
+        api_error(403, 'Client IP is not allowed for meeting_api.');
+    }
+}
+
 /**
  * API 토큰 인증
  *
  * 헤더: X-API-Token: <토큰>
  */
 function require_auth() {
+    meeting_require_allowed_ip();
+
     $headers = function_exists('getallheaders') ? getallheaders() : [];
     // 헤더 키 대소문자 정규화
     $headers_lower = [];

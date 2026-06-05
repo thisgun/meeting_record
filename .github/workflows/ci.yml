@@ -63,3 +63,6 @@ jobs:
         run: |
           find g5_meeting_api/plugin/meeting_api -name '*.php' -print0 \
             | xargs -0 -n1 php -l
+
+      - name: PHP 동작 테스트
+        run: php tests/php/test_bootstrap.php

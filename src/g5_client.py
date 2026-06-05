@@ -150,6 +150,15 @@ class G5ClientBase(ABC):
     @abstractmethod
     def delete_post(self, wr_id: int, bo_table: Optional[str] = None) -> dict: ...
 
+    @abstractmethod
+    def cleanup_test_posts(
+        self,
+        bo_table: Optional[str] = None,
+        older_than_minutes: int = 60,
+        limit: int = 50,
+        dry_run: bool = False,
+    ) -> dict: ...
+
 
 class G5MeetingApiClient(G5ClientBase):
     """그누보드5 plugin/meeting_api PHP endpoint 호출용."""
@@ -297,6 +306,21 @@ class G5MeetingApiClient(G5ClientBase):
             "bo_table": bo_table or self.bo_table,
         }
         return self._post("delete_post.php", payload, max_retries=0)
+
+    def cleanup_test_posts(
+        self,
+        bo_table: Optional[str] = None,
+        older_than_minutes: int = 60,
+        limit: int = 50,
+        dry_run: bool = False,
+    ) -> dict:
+        payload = {
+            "bo_table": bo_table or self.bo_table,
+            "older_than_minutes": int(older_than_minutes),
+            "limit": int(limit),
+            "dry_run": bool(dry_run),
+        }
+        return self._post("cleanup_tests.php", payload, max_retries=0)
 
 
 def format_utterance_comment(utterance: dict) -> str:

@@ -3,6 +3,8 @@
 사용:
     python scripts/check_g5_remote.py                    # 모든 타겟 점검
     python scripts/check_g5_remote.py --target remote    # 특정 타겟만
+    python scripts/check_g5_remote.py --cleanup-stale    # 오래된 연결 테스트 글 정리 후 점검
+    python scripts/check_g5_remote.py --cleanup-only     # 오래된 연결 테스트 글만 정리
 
 각 타겟에 대해:
 1. health.php 응답 확인
@@ -27,7 +29,14 @@ def main() -> int:
     configure_utf8_stdio()
     p = argparse.ArgumentParser()
     p.add_argument("--target", help="특정 타겟 이름만 점검 (예: remote)")
+    p.add_argument("--cleanup-stale", action="store_true", help="오래된 연결 테스트 글을 정리한 뒤 점검")
+    p.add_argument("--cleanup-only", action="store_true", help="오래된 연결 테스트 글만 정리하고 쓰기 테스트는 생략")
+    p.add_argument("--cleanup-minutes", type=int, default=60, help="이 분보다 오래된 테스트 글만 정리 (기본 60)")
+    p.add_argument("--cleanup-limit", type=int, default=50, help="타겟당 최대 정리 글 수 (기본 50, 최대 100)")
+    p.add_argument("--cleanup-dry-run", action="store_true", help="삭제하지 않고 정리 대상만 표시")
     args = p.parse_args()
+    if args.cleanup_only:
+        args.cleanup_stale = True
 
     cfg = load_config()
     clients = build_clients_from_env(cfg)
@@ -66,6 +75,31 @@ def main() -> int:
         except Exception as e:
             print(f"✗ health.php 실패: {e}")
             fail += 1
+            continue
+
+        if args.cleanup_stale:
+            try:
+                cleaned = c.cleanup_test_posts(
+                    older_than_minutes=max(0, args.cleanup_minutes),
+                    limit=max(1, min(100, args.cleanup_limit)),
+                    dry_run=args.cleanup_dry_run,
+                )
+                mode = "대상 확인" if args.cleanup_dry_run else "정리"
+                print(
+                    f"  ✓ 오래된 연결 테스트 글 {mode}: "
+                    f"matched={cleaned.get('matched')}, "
+                    f"deleted_posts={cleaned.get('deleted_posts')}, "
+                    f"deleted_comments={cleaned.get('deleted_comments')}"
+                )
+                for item in (cleaned.get("candidates") or [])[:10]:
+                    print(f"    - wr_id={item.get('wr_id')} / {item.get('datetime')} / {item.get('subject')}")
+            except Exception as e:
+                print(f"  ✗ 오래된 연결 테스트 글 정리 실패: {e}")
+                fail += 1
+                if args.cleanup_only:
+                    continue
+
+        if args.cleanup_only:
             continue
 
         # 2. 인증 동작 확인 (post + comment + update + list + delete)

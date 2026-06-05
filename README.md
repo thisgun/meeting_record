@@ -198,6 +198,7 @@ meeting_record/
 │       ├── list_comments.php    # POST: 게시글 댓글 목록 조회
 │       ├── update_comment.php   # POST: 댓글 본문/작성자 수정
 │       ├── delete_post.php      # POST: 게시글과 댓글 삭제
+│       ├── cleanup_tests.php    # POST: 오래된 연결 테스트 글 정리
 │       └── setup_board.php      # POST: 게시판 자동 생성
 │
 └── <그누보드5루트>/             # ③ 별도 설치 위치. 저장소에는 포함되지 않음
@@ -575,7 +576,7 @@ python -m streamlit run app.py --server.address 0.0.0.0
 ```
 → `http://<PC-IP>:8501` 로 접속 (예: `http://192.168.45.246:8501`)
 
-> 외부 접속을 열 때는 `STREAMLIT_ACCESS_PASSWORD`를 반드시 설정하세요. 기본값은 12시간 세션 만료, 5회 실패 시 300초 잠금이며 실패/잠금 상태는 `data/app_auth_state.json`에 저장됩니다. 필요하면 `.env`에서 `STREAMLIT_SESSION_TTL_SEC`, `STREAMLIT_AUTH_MAX_ATTEMPTS`, `STREAMLIT_AUTH_LOCKOUT_SEC`, `STREAMLIT_AUTH_STATE_PATH`를 조정하세요. 로컬 테스트에서만 인증을 끄려면 `.env`에 `STREAMLIT_ALLOW_NO_AUTH=1`을 명시합니다.
+> 외부 접속을 열 때는 `STREAMLIT_ACCESS_PASSWORD`를 반드시 설정하세요. 기본값은 12시간 세션 만료, 5회 실패 시 300초 잠금이며 실패/잠금 상태는 `data/app_auth_state.json`에 저장됩니다. 필요하면 `.env`에서 `STREAMLIT_SESSION_TTL_SEC`, `STREAMLIT_AUTH_MAX_ATTEMPTS`, `STREAMLIT_AUTH_LOCKOUT_SEC`, `STREAMLIT_AUTH_STATE_PATH`를 조정하세요. 로컬 테스트에서만 인증을 끄려면 `.env`에 `STREAMLIT_ALLOW_NO_AUTH=1`을 명시합니다. 인터넷에 공개해야 한다면 앱 비밀번호만 믿지 말고 VPN, Cloudflare Access, Nginx/Apache Basic Auth 같은 앞단 인증을 함께 두는 것을 권장합니다.
 
 **페이지 구성:**
 
@@ -840,6 +841,8 @@ python doctor.py
    ```php
    define('meeting_API_TOKEN', '강력한_랜덤_48자_이상');
    define('meeting_API_DEBUG', false);
+   // 선택: 호출 가능한 IP/CIDR 제한. 비워두면 IP 제한 없음.
+   // define('meeting_API_ALLOWED_IPS', '203.0.113.10,203.0.113.0/24');
    // setup_board.php 실행 시에만 true. 성공 후 false로 되돌리거나 파일 삭제.
    define('meeting_API_ALLOW_SETUP', true);
    // 선택: 전체 JSON/게시글/댓글 본문 크기 제한 조정
@@ -885,6 +888,7 @@ G5_LEGACY_TARGET=remote
 python doctor.py                                # G5 타겟 섹션
 python scripts/check_g5_remote.py               # 전체 타겟 health + 쓰기/수정/삭제 테스트
 python scripts/check_g5_remote.py --target remote
+python scripts/check_g5_remote.py --cleanup-stale --cleanup-minutes 60
 ```
 
 Python 코드 변경 후에는 빠른 단위 테스트도 실행할 수 있습니다:
@@ -912,6 +916,7 @@ Remove-Item C:\xampp\htdocs\g5_meeting_api      # junction 정리
 
 - `config.local.php` 절대 git/FTP에서 공유 안 함 (토큰 노출)
 - `setup_board.php` 작업 후 `meeting_API_ALLOW_SETUP=false`로 되돌리거나 파일 즉시 삭제
+- 가능하면 `meeting_API_ALLOWED_IPS`로 Python 실행 PC/서버 IP만 허용
 - API 본문 크기 제한 유지 (`meeting_API_MAX_*_BYTES`) — 기본값을 크게 올릴수록 서버 부하 위험 증가
 - 그누보드5 `install/` 폴더 운영 시 삭제
 - HTTPS 사용 (토큰 평문 전송 보호)
@@ -1174,6 +1179,7 @@ CREATE TABLE g5_write_meeting LIKE g5_write_free;
    define('meeting_API_TOKEN', '강력한-48자-이상-랜덤-문자열');
    define('meeting_API_DEBUG', false);  // 디버그 정보 노출 차단
    define('meeting_API_ALLOW_SETUP', false);  // 설치 후 비활성화
+   // define('meeting_API_ALLOWED_IPS', '203.0.113.10,203.0.113.0/24');
    ```
    동일 토큰을 프로젝트 폴더의 `.env`에 있는 `G5_API_TOKEN`에도 설정.
 

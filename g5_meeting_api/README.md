@@ -46,6 +46,7 @@ gnuboard5/
 | POST | `list_comments.php` | 게시글 댓글 목록 조회 |
 | POST | `update_comment.php` | 댓글 본문/작성자 수정 |
 | POST | `delete_post.php` | 게시글과 댓글 삭제 |
+| POST | `cleanup_tests.php` | 오래된 연결 테스트 글 정리 |
 | POST | `setup_board.php` | 게시판 1회 자동 생성 |
 
 모든 API 요청은 헤더 `X-API-Token` 필수.
@@ -56,6 +57,7 @@ gnuboard5/
 기본 요청 크기 제한은 전체 JSON 3 MiB, 게시글 본문 2 MiB, 댓글 본문 256 KiB입니다.
 운영 환경에서 조정이 필요하면 `config.local.php`에 `meeting_API_MAX_BODY_BYTES`,
 `meeting_API_MAX_POST_CONTENT_BYTES`, `meeting_API_MAX_COMMENT_CONTENT_BYTES`를 정의하세요.
+공개 도메인에 설치하는 경우 `meeting_API_ALLOWED_IPS`에 Python을 실행하는 PC/서버의 IP 또는 CIDR을 지정해 호출 가능 대상을 제한하는 것을 권장합니다.
 
 ```bash
 curl -H "X-API-Token: YOUR_TOKEN" \
