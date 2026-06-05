@@ -1,8 +1,11 @@
 import inspect
 import json
+import sys
+import types
 
 import pytest
 
+from src import summarizer as summarizer_module
 from src.summarizer import (
     SummaryContextError,
     SummaryParseError,
@@ -12,6 +15,7 @@ from src.summarizer import (
     _parse_chunk_response,
     _parse_section_response,
     _parse_summary_response,
+    _section_min_summary_chars,
     _split_utterances_for_summary,
     _title_from_chunk_summaries,
     summarize,
@@ -112,6 +116,15 @@ def test_chunk_summary_min_chars_adapts_to_short_tail_chunk() -> None:
     assert _chunk_min_summary_chars("긴 구간 발화" * 1000) == 700
 
 
+def test_section_min_chars_relaxes_for_short_meetings() -> None:
+    short = [{"start": 0, "end": 600, "speaker": "사용자1", "text": "짧은 회의"}]
+    long = [{"start": 0, "end": 7200, "speaker": "사용자1", "text": "긴 회의"}]
+
+    assert _section_min_summary_chars(short, "## 액션 아이템", 400) == 160
+    assert _section_min_summary_chars(short, "## 주요 논의 사항", 900) == 450
+    assert _section_min_summary_chars(long, "## 액션 아이템", 400) == 400
+
+
 def test_parse_chunk_response_allows_heading_variation() -> None:
     summary_md = "## 구간 핵심\n- " + ("구간 재료를 충분히 자세하게 정리합니다. " * 30)
     parsed = _parse_chunk_response(
@@ -135,6 +148,15 @@ def test_parse_section_response_prefixes_missing_heading() -> None:
     assert parsed["summary_md"].startswith("## 액션 아이템")
 
 
+def test_parse_section_response_recovers_truncated_summary_only_json() -> None:
+    raw = '{"summary_md": "## 주요 논의 사항\\n- ' + ("중요한 사례와 숫자를 자세히 보존합니다. " * 40)
+
+    parsed = _parse_section_response(raw, heading="## 주요 논의 사항", min_summary_chars=200)
+
+    assert parsed["summary_md"].startswith("## 주요 논의 사항")
+    assert "중요한 사례" in parsed["summary_md"]
+
+
 def test_title_from_chunk_summaries_uses_first_specific_title() -> None:
     title = _title_from_chunk_summaries(
         [
@@ -144,3 +166,51 @@ def test_title_from_chunk_summaries_uses_first_specific_title() -> None:
     )
 
     assert title == "산업안전 강화와 중대재해 감축 방안"
+
+
+def test_summarize_single_pass_falls_back_to_section_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "ollama",
+        types.SimpleNamespace(Client=lambda host, timeout: object()),
+    )
+    calls: list[str] = []
+
+    def fake_chat_json_with_retries(*args, **kwargs):
+        label = kwargs["label"]
+        calls.append(label)
+        if label == "요약":
+            raise SummaryParseError(
+                "missing sections",
+                raw=json.dumps(
+                    {
+                        "title": "콘텐츠 회의",
+                        "summary_md": "## 회의 개요\n- 일부 섹션만 생성됨",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        heading = label.replace("섹션 보강 ", "")
+        return {"summary_md": heading + "\n- " + ("구체적인 내용을 충분히 정리합니다. " * 80)}
+
+    monkeypatch.setattr(summarizer_module, "_chat_json_with_retries", fake_chat_json_with_retries)
+
+    result = summarize(
+        [
+            {"start": 0, "end": 5, "speaker": "사용자1", "text": "이번 콘텐츠 방향을 논의합시다."},
+            {"start": 6, "end": 12, "speaker": "사용자2", "text": "결정 사항과 후속 조치를 정리해야 합니다."},
+        ]
+    )
+
+    assert calls[0] == "요약"
+    assert "섹션 보강 ## 결정 사항" in calls
+    assert "섹션 보강 ## 액션 아이템" in calls
+    for heading in [
+        "## 회의 개요",
+        "## 회의 흐름 (시간대별)",
+        "## 주요 논의 사항",
+        "## 발언자별 핵심 메시지",
+        "## 결정 사항",
+        "## 액션 아이템",
+    ]:
+        assert heading in result["summary_md"]

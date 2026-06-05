@@ -155,18 +155,23 @@ def _extract_json(raw: str) -> dict:
             pass
 
     # 2) 잘림 보정: title과 summary_md를 정규식으로 추출
+    # Section-only fallback responses may contain just {"summary_md": "..."}
+    # and can be truncated before the closing quote/brace.
     title_m = re.search(r'"title"\s*:\s*"([^"]*)"', raw)
     md_m = re.search(r'"summary_md"\s*:\s*"(.*)', raw, re.DOTALL)
-    if not (title_m and md_m):
+    if not md_m:
         raise ValueError(f"부분 추출 실패. raw 앞 500자:\n{raw[:500]}")
 
     md = md_m.group(1).rstrip()
-    # 마지막 닫는 따옴표가 잘린 상태일 수 있음 → 제거
-    if md.endswith('"'):
+    # 마지막 닫는 따옴표/중괄호가 잘린 상태일 수 있음 → JSON 꼬리 제거
+    if md.endswith('"}'):
+        md = md[:-2]
+    elif md.endswith('"'):
         md = md[:-1]
     # JSON escape 풀기
     md = md.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
-    return {"title": title_m.group(1).strip(), "summary_md": md.strip()}
+    title = title_m.group(1).strip() if title_m else ""
+    return {"title": title, "summary_md": md.strip()}
 
 
 def _parse_summary_response(
@@ -356,6 +361,32 @@ def _final_min_summary_chars(utterances: list[dict]) -> int:
     if duration >= 1800:
         return 2000
     return 800
+
+
+def _section_min_summary_chars(utterances: list[dict], heading: str, default: int) -> int:
+    start, end = _utterance_bounds(utterances)
+    duration = max(0.0, end - start)
+    if duration < 900:
+        caps = {
+            "## 회의 개요": 220,
+            "## 회의 흐름 (시간대별)": 220,
+            "## 주요 논의 사항": 450,
+            "## 발언자별 핵심 메시지": 180,
+            "## 결정 사항": 160,
+            "## 액션 아이템": 160,
+        }
+        return min(default, caps.get(heading, default))
+    if duration < 1800:
+        caps = {
+            "## 회의 개요": 300,
+            "## 회의 흐름 (시간대별)": 350,
+            "## 주요 논의 사항": 700,
+            "## 발언자별 핵심 메시지": 250,
+            "## 결정 사항": 220,
+            "## 액션 아이템": 220,
+        }
+        return min(default, caps.get(heading, default))
+    return default
 
 
 def _max_chunk_input_tokens(max_ctx: int) -> int:
@@ -614,6 +645,7 @@ def _summarize_final_section(
     heading: str,
     instructions: str,
     min_summary_chars: int,
+    material_label: str = "구간별 상세 요약",
     model: str,
     max_ctx: int,
     num_predict: int,
@@ -622,16 +654,19 @@ def _summarize_final_section(
     max_retries: int,
 ) -> str:
     user_msg = (
-        f"아래 구간별 상세 요약을 바탕으로 최종 회의록의 `{heading}` 섹션만 작성하세요.\n"
+        f"아래 {material_label}을 바탕으로 최종 회의록의 `{heading}` 섹션만 작성하세요.\n"
         f"{instructions}\n"
         "반드시 JSON 객체 하나만 출력하세요. 스키마는 {\"summary_md\": \"...\"} 입니다. "
         f"summary_md는 반드시 `{heading}` 헤더로 시작해야 합니다.\n\n"
-        f"--- 구간별 상세 요약 시작 ---\n{material}\n--- 구간별 상세 요약 끝 ---"
+        f"--- {material_label} 시작 ---\n{material}\n--- {material_label} 끝 ---"
     )
+    section_predict = max(2048, min(num_predict, 4096))
+    if heading in {"## 주요 논의 사항", "## 액션 아이템"}:
+        section_predict = max(4096, min(num_predict, 8192))
     options = _build_ollama_options(
         material,
         max_ctx=max_ctx,
-        num_predict=max(2048, min(num_predict, 4096)),
+        num_predict=section_predict,
         num_gpu=num_gpu,
     )
     parsed = _chat_json_with_retries(
@@ -667,6 +702,8 @@ def _summarize_sections_from_chunks(
     *,
     previous_raw: str,
     fallback_title: str,
+    material_label: str = "구간별 상세 요약",
+    notice: str = "최종 통합 요약이 필수 섹션을 놓쳐서 섹션별 보강 요약으로 전환합니다.",
     model: str,
     max_ctx: int,
     num_predict: int,
@@ -679,18 +716,20 @@ def _summarize_sections_from_chunks(
     title = _safe_title_from_raw(previous_raw)
     if title == "회의록" and fallback_title:
         title = fallback_title
-    sys.stdout.write("    최종 통합 요약이 필수 섹션을 놓쳐서 섹션별 보강 요약으로 전환합니다.\n")
+    sys.stdout.write(f"    {notice}\n")
     sys.stdout.flush()
 
     sections = []
     for heading, instructions, min_chars in FINAL_SECTION_SPECS:
+        effective_min_chars = _section_min_summary_chars(utterances, heading, min_chars)
         sections.append(
             _summarize_final_section(
                 client,
                 material,
                 heading=heading,
                 instructions=instructions,
-                min_summary_chars=min_chars,
+                min_summary_chars=effective_min_chars,
+                material_label=material_label,
                 model=model,
                 max_ctx=max_ctx,
                 num_predict=num_predict,
@@ -857,19 +896,36 @@ def summarize(
         num_gpu=num_gpu,
     )
 
-    return _chat_json_with_retries(
-        client,
-        model=model,
-        messages=messages,
-        options=options,
-        keep_alive=keep_alive,
-        max_retries=max_retries,
-        parser=lambda raw: _parse_summary_response(
-            raw,
-            min_summary_chars=_final_min_summary_chars(utterances),
-        ),
-        label="요약",
-    )
+    try:
+        return _chat_json_with_retries(
+            client,
+            model=model,
+            messages=messages,
+            options=options,
+            keep_alive=keep_alive,
+            max_retries=max_retries,
+            parser=lambda raw: _parse_summary_response(
+                raw,
+                min_summary_chars=_final_min_summary_chars(utterances),
+            ),
+            label="요약",
+        )
+    except SummaryParseError as e:
+        return _summarize_sections_from_chunks(
+            client,
+            transcript,
+            utterances,
+            previous_raw=e.raw,
+            fallback_title=_safe_title_from_raw(e.raw),
+            material_label="원본 transcript",
+            notice="요약이 필수 섹션을 놓쳐서 섹션별 보강 요약으로 전환합니다.",
+            model=model,
+            max_ctx=max_ctx,
+            num_predict=num_predict,
+            num_gpu=num_gpu,
+            keep_alive=keep_alive,
+            max_retries=max_retries,
+        )
 
 
 if __name__ == "__main__":
