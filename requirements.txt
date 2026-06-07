@@ -1,6 +1,11 @@
-whisperx>=3.1.0
-faster-whisper>=1.0.0
-pyannote.audio>=3.1.0
+# STT 엔진: faster-whisper 직접 사용 (Python 3.9~3.14 지원).
+# (이전 WhisperX는 ctranslate2==4.4.0을 고정해 Python 3.13+ wheel이 없어 설치 불가였음)
+faster-whisper>=1.1.0
+
+# 고정밀 화자 분리(선택): HuggingFace 토큰 필요. 의존성이 무겁고 최신 Python에서는
+# 미해결될 수 있어 자동 설치를 3.12 이하로 제한한다. 3.13+에서는 로컬(speechbrain)
+# 화자 분리가 자동 사용되며, 필요하면 'pip install pyannote.audio'로 직접 설치 가능.
+pyannote.audio>=3.1.0; python_version < "3.13"
 
 # PyTorch — 여기서는 CPU 빌드가 설치됩니다(모든 환경에서 동작, GPU 불필요).
 # NVIDIA GPU 가속은 '선택 사항'이며, 설치 후 README의 "GPU(CUDA) 가속" 절에 따라

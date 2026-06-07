@@ -1,16 +1,26 @@
-"""WhisperX 기반 STT + 화자 분리.
+"""faster-whisper 기반 STT + 화자 분리.
+
+이전에는 WhisperX를 사용했으나, WhisperX가 `ctranslate2==4.4.0`을 고정(pin)해
+Python 3.13/3.14용 wheel이 없어 설치가 실패했다. faster-whisper를 직접 사용하면
+ctranslate2 4.8+(3.9~3.14 wheel 제공)를 쓸 수 있어 최신 파이썬까지 지원된다.
+
+- 단어 타임스탬프: faster-whisper의 `word_timestamps=True` (WhisperX의 wav2vec2
+  정렬 대체. 정밀도는 약간 낮지만 별도 정렬 모델/의존성이 필요 없다).
+- 배치 추론: faster-whisper `BatchedInferencePipeline` (실패 시 순차 처리로 폴백).
 
 화자 분리 방식 2가지:
-- pyannote (HuggingFace 토큰 + 모델 약관 동의 필요, 정확도 ↑)
+- pyannote (HuggingFace 토큰 + 모델 약관 동의 필요, 정확도 ↑) — 선택 설치
 - 로컬 (speechbrain ECAPA-TDNN + clustering, 인증 불필요, 정확도 중간)
 
-`hf_token`이 비어있으면 자동으로 로컬 fallback. CPU + int8 환경 기준.
+`hf_token`이 비어있거나 pyannote 미설치/실패 시 자동으로 로컬 fallback. CPU + int8 기준.
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 from src.runtime_memory import release_torch_memory
 
@@ -34,14 +44,51 @@ def _resolve_whisper_model(name: str) -> str:
     return name  # HF에서 다운로드 시도
 
 
-def _load_whisperx():
+def _load_faster_whisper():
     try:
-        import whisperx
-        return whisperx
+        import faster_whisper
+        return faster_whisper
     except ImportError as e:
         raise TranscribeError(
-            "whisperx가 설치되지 않았습니다. 'pip install whisperx'를 실행하세요."
+            "faster-whisper가 설치되지 않았습니다. 'pip install faster-whisper'를 실행하세요."
         ) from e
+
+
+def _materialize_segments(seg_iter) -> list[dict]:
+    """faster-whisper Segment 제너레이터 → 정규화된 dict 리스트.
+
+    제너레이터를 즉시 소비하므로, 호출자는 try 안에서 호출해 배치 실패를
+    잡고 순차 처리로 재시도할 수 있다.
+    """
+    out: list[dict] = []
+    for s in seg_iter:
+        words = []
+        for w in (getattr(s, "words", None) or []):
+            words.append({"start": w.start, "end": w.end, "word": w.word})
+        out.append({
+            "start": s.start,
+            "end": s.end,
+            "text": s.text,
+            "words": words,
+        })
+    return out
+
+
+def _transcribe_segments(model, audio, batch_size: int, transcribe_kwargs: dict):
+    """배치 추론 우선, 실패 시 순차 처리로 폴백. (segments, language) 반환."""
+    if batch_size and batch_size > 1:
+        try:
+            from faster_whisper import BatchedInferencePipeline
+            engine = BatchedInferencePipeline(model=model)
+            seg_iter, info = engine.transcribe(
+                audio, batch_size=batch_size, **transcribe_kwargs
+            )
+            return _materialize_segments(seg_iter), info.language
+        except Exception as e:
+            # 배치 미지원 버전이거나 처리 중 오류 → 순차 처리로 재시도
+            print(f"[warn] 배치 추론 실패 → 순차 처리로 재시도: {e}")
+    seg_iter, info = model.transcribe(audio, **transcribe_kwargs)
+    return _materialize_segments(seg_iter), info.language
 
 
 def transcribe_only(
@@ -56,71 +103,90 @@ def transcribe_only(
     vad_filter: bool = True,
     initial_prompt: str = "",
 ):
-    """STT + word align만 수행. 화자 분리는 호출자가 별도 처리.
+    """STT(+단어 타임스탬프)만 수행. 화자 분리는 호출자가 별도 처리.
 
     Args:
         cpu_threads: 0이면 ctranslate2 기본 (보통 모든 코어). 양수면 명시 지정.
-        batch_size: WhisperX transcribe batch (메모리/속도 trade-off).
+        batch_size: 배치 추론 크기 (>1이면 BatchedInferencePipeline 사용).
         vad_filter: faster-whisper의 VAD 사전 필터 (무음 구간 스킵).
 
     Returns:
-        (audio_array, segments_list) — whisperx 내부 형식 그대로
+        (audio_array, result_dict) — result는 {"segments": [...], "language": ...}
+        각 segment: {"start", "end", "text", "words": [{"start","end","word"}, ...]}
     """
-    # whisperx는 bare 'ffmpeg'를 subprocess로 직접 호출하므로 PATH에 보장해 둔다.
+    # 16kHz mono float32 디코딩은 faster-whisper(PyAV)가 처리하지만,
+    # 상류 단계(pydub 등)가 PATH의 ffmpeg를 쓰므로 보장해 둔다.
     from src.audio import ensure_ffmpeg_on_path
     ensure_ffmpeg_on_path()
 
-    whisperx = _load_whisperx()
-    audio = whisperx.load_audio(wav_path)
+    fw = _load_faster_whisper()
+    from faster_whisper import WhisperModel
+    try:
+        decode_audio = fw.decode_audio  # 최신 버전: 패키지 최상위 노출
+    except AttributeError:
+        from faster_whisper.audio import decode_audio  # 구버전 호환
+
+    # PyAV 기반 디코딩 (16kHz mono float32). pyannote 경로에서 재사용.
+    audio = decode_audio(wav_path, sampling_rate=16000)
 
     resolved = _resolve_whisper_model(model_name)
     if resolved != model_name:
         print(f"[info] Whisper 모델 로컬 사용: {resolved}")
 
-    # WhisperX load_model은 일부 옵션을 ctranslate2 WhisperModel로 전달
-    model_kwargs = {"device": device, "compute_type": compute_type, "language": language}
+    model_kwargs = {"device": device, "compute_type": compute_type}
     if cpu_threads > 0:
-        # WhisperX → faster_whisper → ctranslate2 WhisperModel(cpu_threads=N)
-        model_kwargs["threads"] = cpu_threads
-    if vad_filter:
-        # WhisperX 자체 VAD를 사용 (기본 활성). vad_options 지정 가능.
-        model_kwargs["vad_options"] = {"min_silence_duration_ms": 500}
-
-    if initial_prompt:
-        # WhisperX는 asr_options에 initial_prompt 전달
-        existing = model_kwargs.get("asr_options", {})
-        existing["initial_prompt"] = initial_prompt
-        model_kwargs["asr_options"] = existing
-        print(f"[info] Whisper initial_prompt: {initial_prompt[:80]}...")
+        model_kwargs["cpu_threads"] = cpu_threads
 
     print(f"[info] Whisper 설정: batch={batch_size}, threads={cpu_threads or 'auto'}, vad={vad_filter}")
-    model = whisperx.load_model(resolved, **model_kwargs)
-    result = model.transcribe(audio, batch_size=batch_size, language=language)
-    del model
-    release_torch_memory("Whisper 모델 해제", verbose=False)
+    model = WhisperModel(resolved, **model_kwargs)
 
-    align_model = None
-    metadata = None
+    transcribe_kwargs = {
+        "language": language,
+        "beam_size": 5,
+        "vad_filter": vad_filter,
+        "vad_parameters": {"min_silence_duration_ms": 500},
+        # WhisperX의 wav2vec2 정렬 대체: 모델 내장 단어 타임스탬프
+        "word_timestamps": True,
+    }
+    if initial_prompt:
+        transcribe_kwargs["initial_prompt"] = initial_prompt
+        print(f"[info] Whisper initial_prompt: {initial_prompt[:80]}...")
+
     try:
-        # 한국어 align 모델 로컬 경로 우선
-        align_kwargs = {"language_code": language, "device": device}
-        local_align = _MODELS_DIR / "wav2vec2-korean"
-        if language == "ko" and local_align.exists() and any(local_align.iterdir()):
-            align_kwargs["model_name"] = str(local_align)
-            print(f"[info] Align 모델 로컬 사용: {local_align}")
-        align_model, metadata = whisperx.load_align_model(**align_kwargs)
-        result = whisperx.align(
-            result["segments"], align_model, metadata, audio, device,
-            return_char_alignments=False,
-        )
-    except Exception as e:
-        print(f"[warn] align 실패, segment 단위로 진행: {e}")
+        segments, _lang = _transcribe_segments(model, audio, batch_size, transcribe_kwargs)
+        result = {"segments": segments, "language": language}
     finally:
-        del align_model
-        del metadata
-        release_torch_memory("Align 모델 해제", verbose=False)
+        del model
+        release_torch_memory("Whisper 모델 해제", verbose=False)
 
     return audio, result
+
+
+def _assign_speakers_by_overlap(turns: list[tuple], result: dict) -> dict:
+    """화자 turn(start, end, speaker) 목록을 시간 겹침 기준으로 발화에 할당.
+
+    WhisperX의 assign_word_speakers 대체. 각 segment(및 word)에 대해 가장 많이
+    겹치는 화자를 부여한다.
+    """
+    def pick(start: float, end: float):
+        best, best_ov = None, 0.0
+        for ts, te, spk in turns:
+            ov = min(end, te) - max(start, ts)
+            if ov > best_ov:
+                best_ov, best = ov, spk
+        return best
+
+    for seg in result.get("segments", []):
+        s0 = float(seg.get("start", 0.0))
+        s1 = float(seg.get("end", 0.0))
+        spk = pick(s0, s1)
+        if spk is not None:
+            seg["speaker"] = spk
+        for w in (seg.get("words") or []):
+            wspk = pick(float(w.get("start", s0)), float(w.get("end", s1)))
+            if wspk is not None:
+                w["speaker"] = wspk
+    return result
 
 
 def _diarize_pyannote(
@@ -132,32 +198,57 @@ def _diarize_pyannote(
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
 ) -> dict:
-    """pyannote diarization → whisperx assign_word_speakers."""
-    whisperx = _load_whisperx()
+    """pyannote.audio 직접 호출 → 시간 겹침 기반 화자 할당.
+
+    pyannote.audio는 선택 의존성(최신 Python에서는 미설치일 수 있음). 미설치/실패
+    시 예외를 던지면 호출자가 로컬 diarizer로 fallback 한다.
+    """
     try:
-        from whisperx.diarize import DiarizationPipeline
-    except ImportError:
-        from whisperx import DiarizationPipeline  # 구버전 호환
+        from pyannote.audio import Pipeline
+    except ImportError as e:
+        raise TranscribeError(
+            "pyannote.audio가 설치되지 않았습니다 (선택 의존성). "
+            "고정밀 화자 분리를 쓰려면 'pip install pyannote.audio' 후 HF 토큰을 설정하세요."
+        ) from e
+
+    import torch
 
     pipeline = None
-    diarize_segments = None
     try:
-        pipeline = DiarizationPipeline(use_auth_token=hf_token, device=device)
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1", use_auth_token=hf_token
+        )
+        if pipeline is None:
+            raise TranscribeError(
+                "pyannote 모델 로드 실패 — HF 토큰 또는 모델 약관 동의를 확인하세요."
+            )
+        try:
+            pipeline.to(torch.device(device))
+        except Exception:
+            pass  # device 이동 실패해도 CPU로 동작
+
+        # (channel, time) 형태 waveform 텐서로 전달 (파일 재디코딩 회피)
+        waveform = torch.from_numpy(np.ascontiguousarray(audio)).unsqueeze(0)
+        diar_input = {"waveform": waveform, "sample_rate": 16000}
         kwargs = {}
         if min_speakers is not None:
             kwargs["min_speakers"] = min_speakers
         if max_speakers is not None:
             kwargs["max_speakers"] = max_speakers
-        diarize_segments = pipeline(audio, **kwargs)
-        return whisperx.assign_word_speakers(diarize_segments, result)
+
+        diarization = pipeline(diar_input, **kwargs)
+        turns = [
+            (float(seg.start), float(seg.end), spk)
+            for seg, _track, spk in diarization.itertracks(yield_label=True)
+        ]
+        return _assign_speakers_by_overlap(turns, result)
     finally:
-        del diarize_segments
         del pipeline
         release_torch_memory("pyannote 모델 해제", verbose=False)
 
 
 def _segments_from_result(result: dict) -> list[dict]:
-    """whisperx result → 정규화된 segment list (speaker 미할당 가능)."""
+    """result → 정규화된 segment list (speaker 미할당 가능)."""
     out = []
     for seg in result.get("segments", []):
         text = (seg.get("text") or "").strip()
@@ -216,7 +307,7 @@ def transcribe_and_diarize(
         )
 
         if hf_token:
-            # pyannote 경로
+            # pyannote 경로 (선택 의존성, 실패 시 아래 로컬 fallback)
             try:
                 result = _diarize_pyannote(
                     audio, result, hf_token,
@@ -228,7 +319,7 @@ def transcribe_and_diarize(
             except Exception as e:
                 print(f"[warn] pyannote diarization 실패 → 로컬 fallback: {e}")
 
-        # 로컬 fallback (HF 토큰 없거나 pyannote 실패)
+        # 로컬 fallback (HF 토큰 없거나 pyannote 실패/미설치)
         print("[info] 로컬 화자 분리 사용 (speechbrain ECAPA-TDNN)")
         segments = _segments_from_result(result)
         try:

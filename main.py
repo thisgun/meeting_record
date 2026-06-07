@@ -247,7 +247,7 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     else:
         diarize_mode = "pyannote (HF)" if cfg.huggingface_token else "로컬 (speechbrain)"
         _print_step(2, total_steps,
-                    f"음성 인식 + 화자 분리 (WhisperX {cfg.whisper_model}, 분리: {diarize_mode})")
+                    f"음성 인식 + 화자 분리 (Whisper {cfg.whisper_model}, 분리: {diarize_mode})")
         print("    ※ CPU 환경에서는 오래 걸립니다 (1분 오디오당 2~4분).")
         t0 = time.time()
         # 사전의 용어들을 Whisper에게 미리 알림 (정확도 ↑)

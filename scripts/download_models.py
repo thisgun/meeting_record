@@ -53,9 +53,8 @@ def main():
     for size in sizes:
         download(f"Systran/faster-whisper-{size}", f"faster-whisper-{size}")
 
-    # 2) 한국어 alignment 모델 (WhisperX align용)
-    # whisperx 한국어 기본 align 모델: kresnik/wav2vec2-large-xlsr-korean
-    download("kresnik/wav2vec2-large-xlsr-korean", "wav2vec2-korean")
+    # 참고: 이전 WhisperX 정렬용 wav2vec2 모델(kresnik/wav2vec2-large-xlsr-korean)은
+    # 더 이상 받지 않는다. faster-whisper의 내장 단어 타임스탬프(word_timestamps)로 대체됨.
 
     # speechbrain ECAPA-TDNN은 이미 ./data/models/spkrec-ecapa-voxceleb 에 받음 (LocalStrategy.COPY)
     sb_path = MODELS_DIR / "spkrec-ecapa-voxceleb"

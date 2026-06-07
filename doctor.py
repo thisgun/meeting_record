@@ -349,7 +349,7 @@ def check_g5_targets():
 
 def check_packages():
     section("Python 핵심 패키지")
-    deps = ["whisperx", "faster_whisper", "torch", "torchaudio",
+    deps = ["faster_whisper", "torch", "torchaudio",
             "speechbrain", "sklearn", "soundfile", "ollama",
             "dotenv", "psutil", "watchdog", "docx", "streamlit", "huggingface_hub"]
     for d in deps:
@@ -364,6 +364,12 @@ def check_packages():
         ok("kiwipiepy", f"v{getattr(kiwipiepy, '__version__', '?')} (선택)")
     except ImportError:
         warn("kiwipiepy 없음", "선택사항 — 한국어 키워드 추출은 정규식 fallback 사용")
+    try:
+        import pyannote.audio  # noqa: F401
+        ok("pyannote.audio", "고정밀 화자 분리 사용 가능 (HF 토큰 필요)")
+    except ImportError:
+        warn("pyannote.audio 없음",
+             "선택사항 — 로컬(speechbrain) 화자 분리 사용 (Python 3.13+는 기본 미설치)")
 
 
 def main() -> int:
