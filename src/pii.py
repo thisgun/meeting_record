@@ -148,5 +148,10 @@ def mask_segments(segments: list[dict], level: Optional[str] = None) -> tuple[li
     return out, changed
 
 
+def active_level() -> str:
+    """현재 PII_MASK_LEVEL 값 (off/partial/full)."""
+    return os.getenv("PII_MASK_LEVEL", "off").lower().strip()
+
+
 def is_enabled() -> bool:
-    return os.getenv("PII_MASK_LEVEL", "off").lower().strip() in ("partial", "full")
+    return active_level() in ("partial", "full")

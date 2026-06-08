@@ -257,7 +257,8 @@ def run_pipeline(
     print(f"[info] DEVICE={cfg.device}, compute_type={cfg.whisper_compute_type}")
 
     # 2) STT + 화자 분리 (캐시 사용 가능)
-    cache_path = cache.segments_cache_path(src_path, cfg.work_dir)
+    cache_path = cache.segments_cache_path(
+        src_path, cfg.work_dir, model=cfg.whisper_model, language=cfg.whisper_language)
     # --speakers 또는 --rediarize가 지정되면 캐시의 화자 라벨은 무시하고 재분리
     rediarize_only = cache_path.exists() and (num_speakers is not None or rediarize)
     if cache_path.exists() and not rediarize_only:
@@ -334,8 +335,10 @@ def run_pipeline(
         # PII 마스킹 (PII_MASK_LEVEL 설정 시)
         if pii.is_enabled():
             segments, n_masked = pii.mask_segments(segments)
-            if n_masked > 0:
-                print(f"    → PII 마스킹 적용: {n_masked}건 발화")
+            print(f"    → PII 마스킹({pii.active_level()}) 적용: {n_masked}건 발화")
+        else:
+            print("    ※ PII 마스킹 꺼짐(PII_MASK_LEVEL=off) — 주민번호·전화·이메일 등이 "
+                  "그대로 저장/업로드됩니다. 민감 회의는 .env에서 PII_MASK_LEVEL=partial 권장")
         segments = transcriber.remap_speakers(segments)
         segments = transcriber.merge_consecutive(segments)
         # 캐시 저장 (다음 실패 시 재사용)
