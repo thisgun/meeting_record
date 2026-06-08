@@ -153,7 +153,8 @@ def test_summarize_chunk_preserves_transcript_when_chunk_summary_is_unusable(
     def fake_chat_json_with_retries(*args, **kwargs):
         raise SummaryParseError("요약 본문이 너무 짧습니다", raw='{"summary_md": "짧음"}')
 
-    monkeypatch.setattr(summarizer_module, "_chat_json_with_retries", fake_chat_json_with_retries)
+    # 분리 후 _chat_json_with_retries는 summarizer.sections에서 호출된다 → 그 위치를 patch
+    monkeypatch.setattr(summarizer_module.sections, "_chat_json_with_retries", fake_chat_json_with_retries)
 
     parsed = _summarize_chunk(
         object(),
@@ -234,7 +235,8 @@ def test_summarize_single_pass_falls_back_to_section_generation(monkeypatch: pyt
         heading = label.replace("섹션 보강 ", "")
         return {"summary_md": heading + "\n- " + ("구체적인 내용을 충분히 정리합니다. " * 80)}
 
-    monkeypatch.setattr(summarizer_module, "_chat_json_with_retries", fake_chat_json_with_retries)
+    # 분리 후 _chat_json_with_retries는 summarizer.sections에서 호출된다 → 그 위치를 patch
+    monkeypatch.setattr(summarizer_module.sections, "_chat_json_with_retries", fake_chat_json_with_retries)
 
     result = summarize(
         [
