@@ -36,6 +36,8 @@ class Config:
     typo_correction_ai_enabled: bool
     typo_correction_ai_model: str
     typo_correction_ai_chunk_size: int
+    quality_check_enabled: bool
+    quality_block_upload: bool
     g5_api_base: str
     g5_api_token: str
     g5_bo_table: str
@@ -221,6 +223,8 @@ def load_config() -> Config:
         typo_correction_ai_enabled=_bool_env("TYPO_CORRECTION_AI", False),
         typo_correction_ai_model=_clean_env_value(os.getenv("TYPO_CORRECTION_AI_MODEL", "")),
         typo_correction_ai_chunk_size=_int_env("TYPO_CORRECTION_AI_CHUNK_SIZE", 30, minimum=1),
+        quality_check_enabled=_bool_env("QUALITY_CHECK", True),
+        quality_block_upload=_bool_env("QUALITY_BLOCK_UPLOAD", True),
         g5_api_base=os.getenv("G5_API_BASE", "").rstrip("/"),
         g5_api_token=os.getenv("G5_API_TOKEN", ""),
         g5_bo_table=os.getenv("G5_BO_TABLE", "meeting"),

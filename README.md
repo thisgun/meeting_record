@@ -392,6 +392,10 @@ TYPO_CORRECTION=1                # STT 후 사전/.env 오타 보정 적용
 TYPO_CORRECTION_RULES=           # 예: 지개차=>지게차;태양관=>태양광
 TYPO_CORRECTION_AI=0             # 1이면 로컬 Ollama로 명백한 STT 오타만 추가 검사
 
+# 품질 게이트
+QUALITY_CHECK=1                  # STT/화자 분리 위험 신호를 회의록 상단에 표시
+QUALITY_BLOCK_UPLOAD=1           # 품질이 낮으면 G5 자동 업로드 차단
+
 # 그누보드5 API
 G5_API_BASE=http://127.0.0.1/gnuboard5/plugin/meeting_api
 G5_API_TOKEN=
@@ -446,8 +450,14 @@ python main.py "회의.mp3" --speakers 3
 # STT 캐시가 있어도 화자 라벨만 다시 계산해서 캐시를 갱신합니다.
 python main.py "회의.mp3" --speakers 6
 
+# STT는 그대로 두고 새 자동 화자 분리 로직만 다시 적용
+python main.py "회의.mp3" --rediarize
+
 # 그누보드5 업로드 생략 (로컬 DB에만 저장)
 python main.py "회의.mp3" --no-upload
+
+# 품질 게이트가 업로드를 막아도 꼭 올려야 할 때만 강행
+python main.py "회의.mp3" --force-upload
 
 # DB에 저장된 회의 조회
 python main.py --show 1
@@ -458,6 +468,26 @@ python main.py --resync
 # 도움말
 python main.py --help
 ```
+
+기본 자동 화자 분리는 배포용 사용성을 우선해 적응형으로 동작합니다. 로컬 `speechbrain`
+분리 결과가 1인/소수 발화처럼 애매하면 짧거나 비슷한 클러스터를 병합해 한 사람을
+`사용자1`, `사용자2`로 쪼개는 오류를 줄입니다. 반대로 다인원 회의 신호가 뚜렷하면
+긴 발화를 짧은 창으로 나눠 임베딩을 뽑고, 높은 화자 수 후보를 보존하며 병합을 약하게
+적용합니다. 실제 화자 수를 알고 있고 더 세밀한 분리가 필요할 때만 `--speakers N` 또는
+`WATCH_SPEAKERS=N`을 사용하세요.
+
+### 품질 게이트
+
+이 도구는 회의록을 자동으로 “확정”하지 않고, STT/화자 분리 결과가 위험해 보이면 회의록 상단에 `품질 경고`를 붙입니다.
+
+다음 신호가 겹치면 품질을 `낮음`으로 판정하고, 기본값에서는 G5 자동 업로드를 차단합니다.
+
+- 긴 녹음인데 발화가 거의 감지되지 않음
+- 긴 회의인데 화자가 1명으로만 인식됨
+- 같거나 비슷한 문장이 반복됨
+- Whisper 신뢰도 지표가 낮거나 무음 구간이 텍스트화됨
+
+차단된 회의록은 로컬 SQLite DB에는 저장됩니다. 원문을 확인한 뒤 정말 올려야 하면 `python main.py "회의.mp3" --force-upload`로 강행하거나 `.env`에서 `QUALITY_BLOCK_UPLOAD=0`으로 바꿀 수 있습니다.
 
 ### 처리 시간 가이드 (CPU 환경)
 
@@ -1116,11 +1146,13 @@ G5 설정 전에는 로컬 DB 저장만 먼저 테스트할 수 있습니다:
 python watcher.py --no-upload
 ```
 
-실행 후 `data\watch\` 폴더에 `.mp3`, `.m4a` 등 음성 파일을 드롭하면:
+실행 후 `data\watch\` 폴더에 `.mp3`, `.m4a`, `.mp4` 등 음성/동영상 파일을 드롭하면:
 1. 파일 크기 변화 감지 (5초간 안정 = 복사 완료로 판단)
 2. `main.py` 자동 실행 (`.env`의 `WATCH_SPEAKERS` 적용)
-3. STT → 화자 분리 → 요약 → DB → 그누보드5 업로드까지 자동 처리
+3. STT → 화자 분리 → 품질 점검 → 요약 → DB → 그누보드5 업로드까지 자동 처리
 4. 처리 결과는 콘솔 + `data\watch.log`에 기록
+
+품질이 `낮음`으로 판정되면 기본값에서는 G5 업로드가 차단되고 로컬 DB에만 저장됩니다. watcher에서도 강행 업로드가 필요하면 `.env`의 `QUALITY_BLOCK_UPLOAD=0`을 사용하세요.
 
 **Ollama 대기 동작**
 - watcher를 다시 켠 직후 첫 요약은 `gemma4:e2b` 콜드 로딩 때문에 step 3에서 60~90초 동안 출력이 없을 수 있습니다. 이후 `생성 중... N청크`가 보이면 정상입니다.
@@ -1129,6 +1161,7 @@ python watcher.py --no-upload
 
 **핵심 설정 (`.env`)**:
 ```
+# 지원 확장자: mp3, m4a, wav, amr, aac, ogg, flac, wma, mp4
 WATCH_DIR=./data/watch          # 감시할 폴더
 WATCH_SPEAKERS=6                # 화자 수 (빈 값이면 자동 추정)
 WATCH_STABILITY_SEC=5           # 파일 안정 확인 시간

@@ -547,7 +547,10 @@ def list_unsynced(db_path: str | Path, target_names: list[str] | None = None) ->
 
         out: list[dict] = []
         wanted = [t for t in target_names if t]
+        retryable_statuses = {"pending", "partial", "failed"}
         for row in rows:
+            if row.get("sync_status") == "blocked":
+                continue
             target_rows = {
                 r["target_name"]: dict(r)
                 for r in conn.execute(
@@ -555,7 +558,7 @@ def list_unsynced(db_path: str | Path, target_names: list[str] | None = None) ->
                     (row["id"],),
                 ).fetchall()
             }
-            if any(target_rows.get(name, {}).get("sync_status") != "synced" for name in wanted):
+            if any(target_rows.get(name, {}).get("sync_status", "pending") in retryable_statuses for name in wanted):
                 out.append(row)
         return out
 
@@ -677,6 +680,32 @@ def mark_meeting_failed(
                 "UPDATE meetings SET sync_status = 'failed', sync_error = ? WHERE id = ?",
                 (error[:2000], int(meeting_id)),
             )
+
+
+def mark_meeting_upload_blocked(
+    db_path: str | Path,
+    meeting_id: int,
+    error: str,
+    *,
+    target_names: list[str] | None = None,
+) -> None:
+    """Mark a meeting as intentionally not uploaded by the quality gate."""
+    init_db(db_path)
+    target_names = [name for name in (target_names or []) if name]
+    with connect(db_path) as conn:
+        for target_name in target_names:
+            _upsert_meeting_target(
+                conn,
+                meeting_id,
+                target_name,
+                remote_post_id=None,
+                sync_status="blocked",
+                sync_error=error,
+            )
+        conn.execute(
+            "UPDATE meetings SET sync_status = 'blocked', sync_error = ? WHERE id = ?",
+            (error[:2000], int(meeting_id)),
+        )
 
 
 def mark_utterance_synced(

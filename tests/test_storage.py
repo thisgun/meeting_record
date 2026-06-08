@@ -81,3 +81,50 @@ def test_recreate_fts_with_explicit_unicode61(tmp_path: Path) -> None:
     assert storage.get_fts_info(db_path)["tokenizer"] == "unicode61"
     assert storage.search_meetings(db_path, "검색")
     assert storage.search_utterances(db_path, "재생성")
+
+
+def test_blocked_meeting_is_not_resynced(tmp_path: Path) -> None:
+    db_path = tmp_path / "meetings.db"
+    meeting_id = storage.save_meeting(
+        db_path,
+        source_file="bad.mp3",
+        title="확인 필요",
+        summary_md="## 품질 경고\n- 낮음",
+        duration_sec=300.0,
+        utterances=[
+            {"speaker": "사용자1", "start": 0, "end": 2, "text": "테스트"},
+        ],
+    )
+
+    storage.mark_meeting_upload_blocked(
+        db_path,
+        meeting_id,
+        "quality gate",
+        target_names=["remote"],
+    )
+
+    meeting = storage.get_meeting(db_path, meeting_id)
+
+    assert meeting["meeting"]["sync_status"] == "blocked"
+    assert meeting["sync_targets"][0]["sync_status"] == "blocked"
+    assert storage.list_unsynced(db_path) == []
+    assert storage.list_unsynced(db_path, target_names=["remote"]) == []
+
+
+def test_missing_named_target_is_still_unsynced(tmp_path: Path) -> None:
+    db_path = tmp_path / "meetings.db"
+    meeting_id = storage.save_meeting(
+        db_path,
+        source_file="sample.mp3",
+        title="기존 회의",
+        summary_md="## 요약\n- 내용",
+        duration_sec=60.0,
+        utterances=[
+            {"speaker": "사용자1", "start": 0, "end": 2, "text": "테스트"},
+        ],
+    )
+    storage.mark_meeting_synced(db_path, meeting_id, "10", target_name="default")
+
+    unsynced = storage.list_unsynced(db_path, target_names=["remote"])
+
+    assert [row["id"] for row in unsynced] == [meeting_id]

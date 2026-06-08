@@ -65,12 +65,17 @@ def _materialize_segments(seg_iter) -> list[dict]:
         words = []
         for w in (getattr(s, "words", None) or []):
             words.append({"start": w.start, "end": w.end, "word": w.word})
-        out.append({
+        item = {
             "start": s.start,
             "end": s.end,
             "text": s.text,
             "words": words,
-        })
+        }
+        for key in ("avg_logprob", "no_speech_prob", "compression_ratio"):
+            value = getattr(s, key, None)
+            if value is not None:
+                item[key] = value
+        out.append(item)
     return out
 
 
@@ -89,6 +94,54 @@ def _transcribe_segments(model, audio, batch_size: int, transcribe_kwargs: dict)
             print(f"[warn] 배치 추론 실패 → 순차 처리로 재시도: {e}")
     seg_iter, info = model.transcribe(audio, **transcribe_kwargs)
     return _materialize_segments(seg_iter), info.language
+
+
+def _segments_stats(segments: list[dict]) -> tuple[int, float, int]:
+    speech_sec = 0.0
+    chars = 0
+    for seg in segments:
+        start = float(seg.get("start", 0.0) or 0.0)
+        end = float(seg.get("end", start) or start)
+        speech_sec += max(0.0, end - start)
+        chars += len((seg.get("text") or "").strip())
+    return len(segments), speech_sec, chars
+
+
+def _should_retry_without_vad(segments: list[dict], audio_duration_sec: float) -> bool:
+    """VAD가 말소리를 과하게 버렸을 가능성이 크면 재시도."""
+    if audio_duration_sec < 60:
+        return False
+    count, speech_sec, chars = _segments_stats(segments)
+    if count == 0 or chars < 100:
+        return True
+    minutes = max(audio_duration_sec / 60.0, 1e-6)
+    segment_density = count / minutes
+    speech_ratio = speech_sec / max(audio_duration_sec, 1e-6)
+    if audio_duration_sec >= 180 and segment_density < 2.0:
+        return True
+    if audio_duration_sec >= 120 and speech_ratio < 0.12:
+        return True
+    return False
+
+
+def _prefer_vad_retry(
+    original: list[dict],
+    retry: list[dict],
+    audio_duration_sec: float,
+) -> bool:
+    orig_count, orig_speech, orig_chars = _segments_stats(original)
+    retry_count, retry_speech, retry_chars = _segments_stats(retry)
+    if retry_count == 0 or retry_chars == 0:
+        return False
+    if retry_chars < max(50, int(orig_chars * 0.8)):
+        return False
+    if retry_chars >= max(orig_chars + 100, int(orig_chars * 1.2)) and retry_count >= orig_count:
+        return True
+    if retry_count >= max(orig_count + 3, int(orig_count * 1.5)) and retry_chars >= int(orig_chars * 0.9):
+        return True
+    if retry_speech >= orig_speech + max(15.0, audio_duration_sec * 0.1) and retry_chars >= orig_chars:
+        return True
+    return False
 
 
 def transcribe_only(
@@ -154,6 +207,28 @@ def transcribe_only(
 
     try:
         segments, _lang = _transcribe_segments(model, audio, batch_size, transcribe_kwargs)
+        audio_duration_sec = float(len(audio)) / 16000.0 if hasattr(audio, "__len__") else 0.0
+        if vad_filter and _should_retry_without_vad(segments, audio_duration_sec):
+            count, speech_sec, chars = _segments_stats(segments)
+            print(
+                "[warn] VAD 적용 결과가 너무 적어 보입니다 "
+                f"(발화 {count}건, 음성 {speech_sec:.1f}/{audio_duration_sec:.1f}s, 글자 {chars}자). "
+                "VAD를 끄고 STT를 한 번 더 시도합니다."
+            )
+            retry_kwargs = dict(transcribe_kwargs)
+            retry_kwargs["vad_filter"] = False
+            retry_segments, _retry_lang = _transcribe_segments(
+                model, audio, batch_size, retry_kwargs
+            )
+            if _prefer_vad_retry(segments, retry_segments, audio_duration_sec):
+                r_count, r_speech, r_chars = _segments_stats(retry_segments)
+                print(
+                    "[info] VAD off 재시도 결과 채택 "
+                    f"(발화 {r_count}건, 음성 {r_speech:.1f}s, 글자 {r_chars}자)"
+                )
+                segments = retry_segments
+            else:
+                print("[info] VAD off 재시도 결과가 더 낫지 않아 기존 STT 결과를 사용합니다.")
         result = {"segments": segments, "language": language}
     finally:
         del model
@@ -254,12 +329,16 @@ def _segments_from_result(result: dict) -> list[dict]:
         text = (seg.get("text") or "").strip()
         if not text:
             continue
-        out.append({
+        item = {
             "start": float(seg.get("start", 0.0)),
             "end": float(seg.get("end", 0.0)),
             "speaker": seg.get("speaker") or "SPEAKER_00",
             "text": text,
-        })
+        }
+        for key in ("avg_logprob", "no_speech_prob", "compression_ratio"):
+            if key in seg and seg.get(key) is not None:
+                item[key] = seg.get(key)
+        out.append(item)
     return out
 
 
@@ -366,6 +445,14 @@ def merge_consecutive(segments: list[dict], gap_sec: float = 1.0) -> list[dict]:
         if seg["speaker"] == last["speaker"] and seg["start"] - last["end"] <= gap_sec:
             last["end"] = seg["end"]
             last["text"] = f"{last['text']} {seg['text']}".strip()
+            for key in ("no_speech_prob", "compression_ratio"):
+                if seg.get(key) is not None:
+                    last[key] = max(float(last.get(key, 0.0) or 0.0), float(seg[key]))
+            if seg.get("avg_logprob") is not None:
+                last["avg_logprob"] = min(
+                    float(last.get("avg_logprob", seg["avg_logprob"]) or seg["avg_logprob"]),
+                    float(seg["avg_logprob"]),
+                )
         else:
             merged.append(dict(seg))
     return merged

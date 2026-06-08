@@ -51,7 +51,17 @@ WATCH_SPEAKERS = os.getenv("WATCH_SPEAKERS", "").strip()
 WATCH_STABILITY_SEC = float(os.getenv("WATCH_STABILITY_SEC", "5"))
 WATCH_NO_UPLOAD = os.getenv("WATCH_NO_UPLOAD", "").lower().strip() in ("1", "true", "yes", "on")
 
-SUPPORTED_EXT = {".mp3", ".m4a", ".wav", ".amr", ".aac", ".ogg", ".flac", ".wma"}
+SUPPORTED_EXT = {
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".amr",
+    ".aac",
+    ".ogg",
+    ".flac",
+    ".wma",
+    ".mp4",
+}
 
 
 def log(msg: str) -> None:

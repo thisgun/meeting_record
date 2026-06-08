@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import time
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from config import load_config
 from meeting_record.console import configure_utf8_stdio
-from src import audio, cache, dictionary, notifier, pii, storage, summarizer, transcriber
+from src import audio, cache, dictionary, notifier, pii, quality, storage, summarizer, transcriber
 from src.g5_client import (
     G5ApiError,
     build_clients_from_env,
@@ -39,6 +40,49 @@ def _print_speaker_hint(speaker_count: int) -> None:
         "`--speakers 6` 또는 `.env`의 `WATCH_SPEAKERS=6`으로 화자 수를 강제하세요."
     )
     print("      STT 캐시가 있어도 화자만 다시 분리해서 캐시를 갱신합니다.")
+
+
+def _source_terms_from_filename(path: Path, *, max_terms: int = 12) -> list[str]:
+    """파일명에서 Whisper/STT 힌트로 쓸 작품명·인명 후보를 추출."""
+    stem = path.stem
+    stem = re.sub(r"\([^)]*[A-Za-z0-9_-]{6,}[^)]*\)", " ", stem)
+    tokens = re.split(r"[\s\[\]\(\),/&·|_+\-]+", stem)
+    terms: list[str] = []
+    stopwords = {
+        "직캠",
+        "fancam",
+        "회의",
+        "복사본",
+        "영상",
+        "무대인사",
+        "full",
+        "official",
+    }
+    for token in tokens:
+        term = token.strip(" .!?:;\"'")
+        if not term:
+            continue
+        if term.lower() in stopwords:
+            continue
+        if re.fullmatch(r"\d{4,}", term):
+            continue
+        if len(term) < 2:
+            continue
+        if term not in terms:
+            terms.append(term)
+        if len(terms) >= max_terms:
+            break
+    return terms
+
+
+def _combine_whisper_prompt(base_prompt: str, source_terms: list[str]) -> str:
+    parts = []
+    if source_terms:
+        parts.append("파일명 힌트: " + ", ".join(source_terms) + ".")
+    if base_prompt:
+        parts.append(base_prompt)
+    prompt = " ".join(parts).strip()
+    return prompt[:300]
 
 
 def _apply_typo_correction(cfg, segments: list[dict], *, cache_path: Path | None = None) -> list[dict]:
@@ -161,7 +205,14 @@ def _backfill_comment_targets(
     return n
 
 
-def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = None) -> int:
+def run_pipeline(
+    input_path: str,
+    *,
+    upload: bool,
+    num_speakers: int | None = None,
+    rediarize: bool = False,
+    force_upload: bool = False,
+) -> int:
     cfg = load_config()
     src_path = Path(input_path).resolve()
     if not src_path.exists():
@@ -207,8 +258,8 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
 
     # 2) STT + 화자 분리 (캐시 사용 가능)
     cache_path = cache.segments_cache_path(src_path, cfg.work_dir)
-    # --speakers가 지정되면 캐시의 화자 라벨은 무시하고 재분리
-    rediarize_only = cache_path.exists() and num_speakers is not None
+    # --speakers 또는 --rediarize가 지정되면 캐시의 화자 라벨은 무시하고 재분리
+    rediarize_only = cache_path.exists() and (num_speakers is not None or rediarize)
     if cache_path.exists() and not rediarize_only:
         _print_step(2, total_steps,
                     f"발화 캐시 사용: {cache_path.name}")
@@ -218,14 +269,20 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         print(f"    → 발화 {len(segments)}건, 화자 {speaker_count}명 (캐시)")
         _print_speaker_hint(speaker_count)
     elif rediarize_only:
+        rediarize_label = (
+            f"{num_speakers}명 강제" if num_speakers is not None else "자동 추정"
+        )
         _print_step(2, total_steps,
-                    f"화자 재분리 ({num_speakers}명 강제, STT 캐시 사용)")
+                    f"화자 재분리 ({rediarize_label}, STT 캐시 사용)")
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         # 텍스트/시간만 보존, 화자 라벨 무시
-        base_segments = [
-            {"start": s["start"], "end": s["end"], "text": s["text"], "speaker": "UNKNOWN"}
-            for s in cached
-        ]
+        base_segments = []
+        for s in cached:
+            item = {"start": s["start"], "end": s["end"], "text": s["text"], "speaker": "UNKNOWN"}
+            for key in ("avg_logprob", "no_speech_prob", "compression_ratio"):
+                if key in s:
+                    item[key] = s[key]
+            base_segments.append(item)
         t0 = time.time()
         from src.diarizer_local import diarize_local
         segments = diarize_local(
@@ -251,7 +308,13 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
         print("    ※ CPU 환경에서는 오래 걸립니다 (1분 오디오당 2~4분).")
         t0 = time.time()
         # 사전의 용어들을 Whisper에게 미리 알림 (정확도 ↑)
-        whisper_prompt = dictionary.build_whisper_prompt(cfg.db_path)
+        source_terms = _source_terms_from_filename(src_path)
+        whisper_prompt = _combine_whisper_prompt(
+            dictionary.build_whisper_prompt(cfg.db_path),
+            source_terms,
+        )
+        if source_terms:
+            print(f"    → 파일명 힌트 적용: {', '.join(source_terms[:8])}")
         segments = transcriber.transcribe_and_diarize(
             str(wav_path),
             hf_token=cfg.huggingface_token,
@@ -284,6 +347,13 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
               f"({time.time()-t0:.1f}s, 캐시: {cache_path.name})")
         _print_speaker_hint(speaker_count)
 
+    quality_report = quality.analyze_segments(segments, duration_sec=duration)
+    if cfg.quality_check_enabled:
+        for line in quality.format_console_lines(quality_report):
+            print(line)
+    else:
+        quality_report = quality.QualityReport("ok", tuple(), {})
+
     # 3) 요약 — Ollama가 모델을 로드할 수 있도록 whisperx/pyannote 메모리 먼저 해제
     release_torch_memory("STT 후")
     memory_ok, memory_snapshot = wait_for_min_free_ram(
@@ -309,6 +379,7 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     try:
         summary = summarizer.summarize(
             segments,
+            source_context=src_path.stem,
             model=cfg.ollama_model,
             host=cfg.ollama_host,
             timeout=cfg.ollama_timeout_sec,
@@ -338,6 +409,13 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
     if pii.is_enabled():
         summary["summary_md"] = pii.mask_text(summary["summary_md"])
         summary["title"] = pii.mask_text(summary["title"])
+    if cfg.quality_check_enabled and not quality_report.ok:
+        summary["summary_md"] = quality.prepend_quality_notice(
+            summary["summary_md"],
+            quality_report,
+        )
+        if quality_report.severity == "danger" and not summary["title"].startswith("[확인 필요]"):
+            summary["title"] = f"[확인 필요] {summary['title']}"
     print(f"    → 제목: {summary['title']} ({time.time()-t0:.1f}s)")
 
     # 4) DB 저장
@@ -372,6 +450,37 @@ def run_pipeline(input_path: str, *, upload: bool, num_speakers: int | None = No
             elapsed_sec=time.time() - pipeline_start,
         )
         return 0
+
+    if (
+        cfg.quality_check_enabled
+        and cfg.quality_block_upload
+        and quality_report.should_block_upload
+        and not force_upload
+    ):
+        _print_step(6, total_steps, "품질 게이트: G5 업로드 차단")
+        reason = "; ".join(issue.message for issue in quality_report.issues[:4])
+        storage.mark_meeting_upload_blocked(
+            cfg.db_path,
+            meeting_id,
+            f"Quality gate blocked upload: {reason}",
+            target_names=[client.name for client in clients],
+        )
+        print("    [warn] 자동 인식 품질이 낮아 G5 업로드를 차단했습니다.")
+        print("    [warn] 로컬 DB에는 저장되어 있으니 원문 확인 후 필요한 경우 수정/업로드하세요.")
+        print("    [hint] 꼭 업로드해야 한다면 --force-upload 또는 QUALITY_BLOCK_UPLOAD=0을 사용하세요.")
+        notifier.notify_meeting_done(
+            meeting_id=meeting_id,
+            title=summary["title"],
+            source_file=str(src_path),
+            duration_sec=duration,
+            speaker_count=len({s["speaker"] for s in segments}),
+            utterance_count=len(segments),
+            elapsed_sec=time.time() - pipeline_start,
+        )
+        return 0
+
+    if quality_report.should_block_upload and force_upload:
+        print("[warn] 품질 게이트 위험 판정이지만 --force-upload로 G5 업로드를 강행합니다.")
 
     # 6) 그누보드5 업로드 (멀티 타겟 지원: G5_TARGETS=local,remote)
     target_names = ", ".join(c.name for c in clients)
@@ -658,11 +767,19 @@ def main(argv: list[str] | None = None) -> int:
     configure_utf8_stdio()
 
     parser = argparse.ArgumentParser(description="회의록 자동 기록")
-    parser.add_argument("audio_file", nargs="?", help="입력 오디오 파일 (m4a/mp3/wav/amr)")
+    parser.add_argument(
+        "audio_file",
+        nargs="?",
+        help="입력 오디오/동영상 파일 (mp3/m4a/wav/amr/mp4)",
+    )
     parser.add_argument("--no-upload", action="store_true",
                         help="원격 업로드 생략, 로컬 저장만")
+    parser.add_argument("--force-upload", action="store_true",
+                        help="품질 게이트가 위험으로 판단해도 G5 업로드 강행")
     parser.add_argument("--speakers", type=int, default=None, metavar="N",
                         help="화자 수 지정 (지정 시 자동 추정 대신 N명으로 클러스터링)")
+    parser.add_argument("--rediarize", action="store_true",
+                        help="기존 STT 캐시를 사용해 화자 라벨만 자동으로 다시 계산")
     parser.add_argument("--show", type=int, metavar="MEETING_ID",
                         help="DB에서 회의 조회")
     parser.add_argument("--resync", action="store_true",
@@ -684,6 +801,8 @@ def main(argv: list[str] | None = None) -> int:
         args.audio_file,
         upload=not args.no_upload,
         num_speakers=args.speakers,
+        rediarize=args.rediarize,
+        force_upload=args.force_upload,
     )
 
 

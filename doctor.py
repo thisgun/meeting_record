@@ -215,6 +215,8 @@ def check_config():
         if cfg.typo_correction_ai_enabled:
             ok(f"TYPO_CORRECTION_AI_MODEL = {cfg.typo_correction_ai_model or cfg.ollama_model}")
             ok(f"TYPO_CORRECTION_AI_CHUNK_SIZE = {cfg.typo_correction_ai_chunk_size}")
+        ok(f"QUALITY_CHECK = {1 if cfg.quality_check_enabled else 0}")
+        ok(f"QUALITY_BLOCK_UPLOAD = {1 if cfg.quality_block_upload else 0}")
         ok(f"G5_API_BASE = {cfg.g5_api_base}")
     except Exception as e:
         fail("config 로드 실패", str(e))
