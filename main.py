@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 import sys
 import time
@@ -19,6 +18,8 @@ from pathlib import Path
 from config import load_config
 from meeting_record.console import configure_utf8_stdio
 from src import audio, cache, dictionary, notifier, pii, quality, storage, summarizer, transcriber
+from src.whisper_prompt import _combine_whisper_prompt, _source_terms_from_filename
+from src.idempotency import _remote_idempotency_key
 from src.g5_client import (
     G5ApiError,
     build_clients_from_env,
@@ -40,49 +41,6 @@ def _print_speaker_hint(speaker_count: int) -> None:
         "`--speakers 6` 또는 `.env`의 `WATCH_SPEAKERS=6`으로 화자 수를 강제하세요."
     )
     print("      STT 캐시가 있어도 화자만 다시 분리해서 캐시를 갱신합니다.")
-
-
-def _source_terms_from_filename(path: Path, *, max_terms: int = 12) -> list[str]:
-    """파일명에서 Whisper/STT 힌트로 쓸 작품명·인명 후보를 추출."""
-    stem = path.stem
-    stem = re.sub(r"\([^)]*[A-Za-z0-9_-]{6,}[^)]*\)", " ", stem)
-    tokens = re.split(r"[\s\[\]\(\),/&·|_+\-]+", stem)
-    terms: list[str] = []
-    stopwords = {
-        "직캠",
-        "fancam",
-        "회의",
-        "복사본",
-        "영상",
-        "무대인사",
-        "full",
-        "official",
-    }
-    for token in tokens:
-        term = token.strip(" .!?:;\"'")
-        if not term:
-            continue
-        if term.lower() in stopwords:
-            continue
-        if re.fullmatch(r"\d{4,}", term):
-            continue
-        if len(term) < 2:
-            continue
-        if term not in terms:
-            terms.append(term)
-        if len(terms) >= max_terms:
-            break
-    return terms
-
-
-def _combine_whisper_prompt(base_prompt: str, source_terms: list[str]) -> str:
-    parts = []
-    if source_terms:
-        parts.append("파일명 힌트: " + ", ".join(source_terms) + ".")
-    if base_prompt:
-        parts.append(base_prompt)
-    prompt = " ".join(parts).strip()
-    return prompt[:300]
 
 
 def _apply_typo_correction(cfg, segments: list[dict], *, cache_path: Path | None = None) -> list[dict]:
@@ -131,30 +89,6 @@ def _utterance_for_comment(row: dict) -> dict:
         "end": row["end_sec"],
         "text": row["text"],
     }
-
-
-def _safe_key_part(value: str) -> str:
-    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
-    return "".join(ch if ch in allowed else "_" for ch in str(value or "").lower())
-
-
-def _remote_idempotency_key(
-    kind: str,
-    meeting_uuid: str,
-    target_name: str,
-    *,
-    utterance_uuid: str | None = None,
-) -> str:
-    meeting_ref = _safe_key_part(meeting_uuid)
-    target = _safe_key_part(target_name or "default")
-    if not meeting_ref:
-        raise ValueError("meeting_uuid is required for remote idempotency")
-    if utterance_uuid is None:
-        return f"meeting_record:{kind}:{meeting_ref}:{target}"
-    utterance_ref = _safe_key_part(utterance_uuid)
-    if not utterance_ref:
-        raise ValueError("utterance_uuid is required for comment idempotency")
-    return f"meeting_record:{kind}:{meeting_ref}:{utterance_ref}:{target}"
 
 
 def _adopt_legacy_default_target(cfg, clients) -> None:
