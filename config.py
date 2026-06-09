@@ -31,6 +31,7 @@ class Config:
     whisper_cpu_threads: int
     whisper_batch_size: int
     whisper_vad_filter: bool
+    whisper_condition_on_previous_text: bool
     typo_correction_enabled: bool
     typo_correction_rules: str
     typo_correction_ai_enabled: bool
@@ -218,6 +219,11 @@ def load_config() -> Config:
         whisper_cpu_threads=int(os.getenv("WHISPER_CPU_THREADS", "0")),
         whisper_batch_size=int(os.getenv("WHISPER_BATCH_SIZE", "8")),
         whisper_vad_filter=os.getenv("WHISPER_VAD_FILTER", "1") not in ("0", "false", "False", ""),
+        # 기본 True(=faster-whisper 기본·현행 동작 유지). 음악/잡음 많은 음원에서
+        # 환각·반복이 심하면 0으로 끄면 줄어든다(또렷한 회의는 켜두는 편이 보통 유리).
+        whisper_condition_on_previous_text=os.getenv(
+            "WHISPER_CONDITION_ON_PREVIOUS_TEXT", "1"
+        ) not in ("0", "false", "False", ""),
         typo_correction_enabled=_bool_env("TYPO_CORRECTION", True),
         typo_correction_rules=os.getenv("TYPO_CORRECTION_RULES", ""),
         typo_correction_ai_enabled=_bool_env("TYPO_CORRECTION_AI", False),

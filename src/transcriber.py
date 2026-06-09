@@ -154,6 +154,7 @@ def transcribe_only(
     cpu_threads: int = 0,
     batch_size: int = 8,
     vad_filter: bool = True,
+    condition_on_previous_text: bool = True,
     initial_prompt: str = "",
 ):
     """STT(+단어 타임스탬프)만 수행. 화자 분리는 호출자가 별도 처리.
@@ -162,6 +163,8 @@ def transcribe_only(
         cpu_threads: 0이면 ctranslate2 기본 (보통 모든 코어). 양수면 명시 지정.
         batch_size: 배치 추론 크기 (>1이면 BatchedInferencePipeline 사용).
         vad_filter: faster-whisper의 VAD 사전 필터 (무음 구간 스킵).
+        condition_on_previous_text: 직전 텍스트를 문맥으로 사용(기본 True). 음악/잡음
+            구간에서 환각·반복이 심하면 False로 끄면 줄어든다.
 
     Returns:
         (audio_array, result_dict) — result는 {"segments": [...], "language": ...}
@@ -198,9 +201,12 @@ def transcribe_only(
         "beam_size": 5,
         "vad_filter": vad_filter,
         "vad_parameters": {"min_silence_duration_ms": 500},
+        "condition_on_previous_text": condition_on_previous_text,
         # WhisperX의 wav2vec2 정렬 대체: 모델 내장 단어 타임스탬프
         "word_timestamps": True,
     }
+    if not condition_on_previous_text:
+        print("[info] condition_on_previous_text=False (음악/잡음 환각 억제 모드)")
     if initial_prompt:
         transcribe_kwargs["initial_prompt"] = initial_prompt
         print(f"[info] Whisper initial_prompt: {initial_prompt[:80]}...")
@@ -364,6 +370,7 @@ def transcribe_and_diarize(
     cpu_threads: int = 0,
     batch_size: int = 8,
     vad_filter: bool = True,
+    condition_on_previous_text: bool = True,
     initial_prompt: str = "",
 ) -> list[dict]:
     """STT + 화자 분리 통합. hf_token이 비어있으면 로컬 (speechbrain) fallback.
@@ -388,6 +395,7 @@ def transcribe_and_diarize(
             cpu_threads=cpu_threads,
             batch_size=batch_size,
             vad_filter=vad_filter,
+            condition_on_previous_text=condition_on_previous_text,
             initial_prompt=initial_prompt,
         )
 

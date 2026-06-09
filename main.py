@@ -262,6 +262,7 @@ def run_pipeline(
             cpu_threads=cfg.whisper_cpu_threads,
             batch_size=cfg.whisper_batch_size,
             vad_filter=cfg.whisper_vad_filter,
+            condition_on_previous_text=cfg.whisper_condition_on_previous_text,
             initial_prompt=whisper_prompt,
         )
         # STT 후 사전/.env 치환 적용 (Whisper가 못 잡은 오류 자동 교정)

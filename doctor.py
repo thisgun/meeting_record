@@ -199,6 +199,8 @@ def check_config():
         ok(f"DEVICE = {cfg.device}")
         ok(f"WHISPER_MODEL = {cfg.whisper_model}")
         ok(f"WHISPER_COMPUTE_TYPE = {cfg.whisper_compute_type}")
+        ok(f"WHISPER_CONDITION_ON_PREVIOUS_TEXT = "
+           f"{1 if cfg.whisper_condition_on_previous_text else 0}")
         ok(f"OLLAMA_MODEL = {cfg.ollama_model}")
         ok(f"OLLAMA_HOST = {cfg.ollama_host}")
         ok(f"OLLAMA_KEEP_ALIVE = {cfg.ollama_keep_alive}")
