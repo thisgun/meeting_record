@@ -413,6 +413,9 @@ TYPO_CORRECTION_AI=0             # 1이면 로컬 Ollama로 명백한 STT 오타
 QUALITY_CHECK=1                  # STT/화자 분리 위험 신호를 회의록 상단에 표시
 QUALITY_BLOCK_UPLOAD=1           # 품질이 낮으면 G5 자동 업로드 차단
 
+# 본문 하단 처리 정보 푸터 (오디오 길이·처리 시간·화자 수·모델). 끄려면 0
+POST_PROCESSING_FOOTER=1
+
 # 그누보드5 API
 G5_API_BASE=http://127.0.0.1/gnuboard5/plugin/meeting_api
 G5_API_TOKEN=

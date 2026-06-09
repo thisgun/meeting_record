@@ -39,6 +39,7 @@ class Config:
     typo_correction_ai_chunk_size: int
     quality_check_enabled: bool
     quality_block_upload: bool
+    post_processing_footer: bool
     g5_api_base: str
     g5_api_token: str
     g5_bo_table: str
@@ -231,6 +232,8 @@ def load_config() -> Config:
         typo_correction_ai_chunk_size=_int_env("TYPO_CORRECTION_AI_CHUNK_SIZE", 30, minimum=1),
         quality_check_enabled=_bool_env("QUALITY_CHECK", True),
         quality_block_upload=_bool_env("QUALITY_BLOCK_UPLOAD", True),
+        # 게시글/요약 본문 하단에 처리 정보(오디오 길이·처리 시간·모델) 푸터 표시
+        post_processing_footer=_bool_env("POST_PROCESSING_FOOTER", True),
         g5_api_base=os.getenv("G5_API_BASE", "").rstrip("/"),
         g5_api_token=os.getenv("G5_API_TOKEN", ""),
         g5_bo_table=os.getenv("G5_BO_TABLE", "meeting"),

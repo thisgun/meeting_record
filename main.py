@@ -17,7 +17,7 @@ from pathlib import Path
 
 from config import load_config
 from meeting_record.console import configure_utf8_stdio
-from src import audio, cache, dictionary, notifier, pii, quality, storage, summarizer, transcriber
+from src import audio, cache, dictionary, notifier, pii, post_footer, quality, storage, summarizer, transcriber
 from src.whisper_prompt import _combine_whisper_prompt, _source_terms_from_filename
 from src.idempotency import _remote_idempotency_key
 from src.g5_client import (
@@ -355,6 +355,18 @@ def run_pipeline(
         if quality_report.severity == "danger" and not summary["title"].startswith("[확인 필요]"):
             summary["title"] = f"[확인 필요] {summary['title']}"
     print(f"    → 제목: {summary['title']} ({time.time()-t0:.1f}s)")
+
+    # 처리 정보 푸터(오디오 길이·처리 시간·모델)를 본문 하단에 추가.
+    # 무거운 작업(STT+화자분리+요약)이 끝난 시점의 경과시간 = 사실상의 처리 시간.
+    # summary_md에 붙이므로 DB·게시글·재업로드 모두 동일하게 표시된다.
+    if cfg.post_processing_footer:
+        summary["summary_md"] += post_footer.format_processing_footer(
+            duration_sec=duration,
+            elapsed_sec=time.time() - pipeline_start,
+            whisper_model=cfg.whisper_model,
+            speaker_count=len({s["speaker"] for s in segments}),
+            utterance_count=len(segments),
+        )
 
     # 4) DB 저장
     _print_step(4, total_steps, f"SQLite 저장 ({cfg.db_path})")
