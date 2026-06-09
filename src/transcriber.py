@@ -290,9 +290,15 @@ def _diarize_pyannote(
 
     pipeline = None
     try:
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1", use_auth_token=hf_token
-        )
+        # pyannote.audio 4.x는 token=, 3.x는 use_auth_token= 인자를 쓴다 → 둘 다 지원
+        try:
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1", token=hf_token
+            )
+        except TypeError:
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1", use_auth_token=hf_token
+            )
         if pipeline is None:
             raise TranscribeError(
                 "pyannote 모델 로드 실패 — HF 토큰 또는 모델 약관 동의를 확인하세요."

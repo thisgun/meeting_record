@@ -384,9 +384,9 @@ python scripts\download_models.py
 ### 환경 변수 (.env)
 
 ```env
-# HuggingFace 토큰 (선택)
+# HuggingFace 토큰 (선택, 무료 — 결제 아닌 인증용)
 # 비워두면 로컬 화자 분리 (speechbrain) 자동 사용
-# 채우면 더 정확한 pyannote 사용 (https://hf.co/pyannote/speaker-diarization-3.1 약관 동의 필요)
+# 채우면 더 정확한 pyannote 사용. 발급/약관동의 방법은 위 "정밀 화자 분리 — pyannote" 절 참고.
 HUGGINGFACE_TOKEN=
 
 # Ollama 설정
@@ -492,6 +492,53 @@ python main.py --help
 긴 발화를 짧은 창으로 나눠 임베딩을 뽑고, 높은 화자 수 후보를 보존하며 병합을 약하게
 적용합니다. 실제 화자 수를 알고 있고 더 세밀한 분리가 필요할 때만 `--speakers N` 또는
 `WATCH_SPEAKERS=N`을 사용하세요.
+
+### 정밀 화자 분리 — pyannote (선택 · **무료**)
+
+기본 로컬 `speechbrain` 화자 분리가 여러 사람을 1명으로 뭉치거나 서로 다른 사람을 같은
+`사용자N`으로 묶을 때, **pyannote**로 바꾸면 화자 구분 정확도가 올라갑니다. (특히 발화가
+겹치거나 배경음이 있는 녹음)
+
+> 💸 **유료가 아닙니다.** `HUGGINGFACE_TOKEN`은 결제가 아니라 **무료 인증 토큰**입니다.
+> 화자 분리는 전부 **이 PC(로컬)에서 실행**되어 사용량 과금이 없습니다.
+> - `pyannote.audio`(라이브러리): 무료·오픈소스 — 이미 설치돼 있음
+> - 화자 분리 모델: HuggingFace에서 무료. 단 **약관 동의 + 무료 토큰** 필요(gated 모델)
+> - ⚠️ 별개로 **pyannoteAI**라는 유료 클라우드 API가 있지만, 이 프로젝트는 그게 아니라
+>   **로컬 pyannote.audio**를 씁니다 — 무관, 무료.
+
+**설정 (한 번만):**
+
+1. **무료 토큰 발급** — https://hf.co/settings/tokens 에서 가입 후 **`read`** 권한 토큰 생성
+2. **모델 약관 동의** — 아래 두 페이지에 접속해 각각 **Agree / Accept** 클릭 (무료):
+   - https://hf.co/pyannote/speaker-diarization-3.1
+   - https://hf.co/pyannote/segmentation-3.0
+3. **`.env`에 토큰 추가:**
+   ```env
+   HUGGINGFACE_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+
+**적용 후 동작:**
+- 토큰이 있으면 자동으로 pyannote 사용, 비어 있으면 speechbrain으로 자동 fallback.
+- 모델 약관 미동의(403)이거나 pyannote 로드 실패 시에도 **speechbrain으로 안전하게 fallback**되므로 파이프라인이 멈추지 않습니다.
+- pyannote 모델은 **첫 실행 때 1회 다운로드**됩니다(수백 MB).
+
+**화자만 다시 분리** (STT 캐시 재사용, 빠름):
+```bash
+python main.py "회의.mp3" --speakers 5     # 화자 수 강제
+python main.py "회의.mp3" --rediarize       # 화자 수 자동 추정으로 재분리
+```
+
+> ⚠️ **`--speakers`/`--rediarize`(캐시 재분리)는 로컬 speechbrain을 씁니다.** pyannote는
+> **신규 STT(캐시 없는 전체 실행) 경로에서만** 적용됩니다. pyannote로 처음부터 분리하려면
+> `data/work/`의 해당 `*.segments.json`을 지우고 전체 실행하세요.
+
+**⚠️ 토큰 권한 / 의존성 주의 (실전에서 자주 막히는 곳):**
+- 토큰은 **classic `read` 토큰**을 쓰거나, fine-grained 토큰이면 **"public gated repositories 접근"** 권한을 켜야 합니다 (없으면 `403 enable access to public gated repositories`).
+- 모델 **2개 모두** 약관 동의 필수: `speaker-diarization-3.1` **그리고** `segmentation-3.0` (하나라도 빠지면 `403 GatedRepoError`).
+- **Windows에서는 pyannote.audio 4.x가 speechbrain의 `k2_fsa` lazy import와 충돌**할 수 있습니다(`k2`는 Windows 휠 없음). 이 경우 자동으로 speechbrain으로 fallback됩니다. pyannote가 꼭 필요하면 **Linux 환경** 또는 `pyannote.audio==3.1` 사용을 권장합니다.
+- 어떤 이유로든 pyannote 로드 실패 시 **speechbrain으로 안전 fallback**되어 파이프라인은 멈추지 않습니다.
+
+> 🔐 토큰은 비밀값입니다. `.env`에만 두고(git 제외) 채팅·문서·코드에 노출하지 마세요. 노출됐다면 HuggingFace에서 재발급(rotate)하세요.
 
 ### 품질 게이트
 
