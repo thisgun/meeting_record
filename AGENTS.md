@@ -61,6 +61,9 @@ php -l g5_meeting_api/plugin/meeting_api/파일명.php
 - 공개 배포용 문서는 Windows PowerShell 예시를 기본으로 하되, OS 차이가 있으면 macOS/Linux도 함께 고려합니다.
 - Python 코드는 작은 함수 단위로 유지하고, CLI 출력은 사용자가 원인과 다음 행동을 바로 알 수 있게 씁니다.
 - 설정은 가능한 한 `.env` → `config.py` → 호출부 흐름으로 노출합니다.
+- **모듈 구조는 의도된 3계층**(전면 패키지화 보류): 진입점=루트 스크립트(`python main.py`), 설정=`from config import`,
+  공통 유틸=`from meeting_record.X`, 기능=`from src.X`. `src` 모듈끼리도 `from src.X`(절대), 서브패키지 내부만 상대 import.
+  "절반만 이전된 mess"로 오해해 임의 대규모 이전을 하지 말 것. (README "모듈 구조 / import 규칙" 참조)
 - 새로운 환경 변수는 `.env.example`, README, `doctor.py` 진단 출력을 함께 갱신합니다.
 - 기존 단일 타겟 G5 설정과 멀티 타겟 설정의 하위 호환성을 깨지 않습니다.
 - 그누보드5 원본 수정은 피하고, `plugin/meeting_api/` 안에서만 API를 확장합니다.
@@ -86,7 +89,7 @@ php -l g5_meeting_api/plugin/meeting_api/파일명.php
 - `src/audio.py`: ffmpeg 탐색 및 WAV 정규화
 - `src/transcriber.py`: WhisperX STT와 화자 분리 통합
 - `src/diarizer_local.py`: speechbrain 기반 로컬 화자 분리
-- `src/summarizer.py`: Ollama 요약 및 JSON 파싱
+- `src/summarizer/`: Ollama 요약 패키지 (prompts/parsing/chunking/ollama_io/sections, `summarize()`)
 - `src/storage.py`: SQLite 저장/검색/동기화 상태
 - `src/g5_client.py`: 그누보드5 API 클라이언트
 - `g5_meeting_api/plugin/meeting_api/`: 그누보드5 PHP REST API

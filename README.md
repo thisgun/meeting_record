@@ -162,8 +162,9 @@ python -m streamlit run app.py
 ```
 meeting_record/
 │
-├── main.py                    # CLI 진입점
+├── main.py                    # CLI 진입점 (그 외: doctor.py, app.py, watcher.py, export.py, enroll.py)
 ├── config.py                  # .env 파일 로드 및 검증
+├── meeting_record/            # 공통 유틸 패키지 (console UTF-8 stdio, cli)
 ├── requirements.txt           # Python 패키지 목록
 ├── .env                       # 환경 변수 (사용자 비밀값, git 무시)
 ├── .env.example               # .env 작성 가이드
@@ -172,7 +173,7 @@ meeting_record/
 │   ├── audio.py               # 오디오 파일을 16kHz WAV로 변환
 │   ├── transcriber.py         # 음성 → 텍스트 + 화자 분리
 │   ├── diarizer_local.py      # 로컬 화자 분리 (HF 토큰 불필요)
-│   ├── summarizer.py          # Ollama gemma4:e2b로 요약
+│   ├── summarizer/            # 요약 패키지 (prompts/parsing/chunking/ollama_io/sections)
 │   ├── storage.py             # SQLite 저장/조회
 │   └── g5_client.py           # 그누보드5 API 호출
 │
@@ -204,6 +205,22 @@ meeting_record/
 └── <그누보드5루트>/             # ③ 별도 설치 위치. 저장소에는 포함되지 않음
     └── plugin/meeting_api/      # 위 배포 패키지를 복사해 배치
 ```
+
+### 모듈 구조 / import 규칙 (의도된 3계층)
+
+이 저장소는 **루트 진입점 + `src` 구현 패키지 + `meeting_record` 공통 패키지**의 3계층을 의도적으로 유지합니다. (전면 패키지화는 현재 목표가 아니며 **보류** 상태 — 진입점을 `python main.py`로 단순 실행하기 위함)
+
+| 계층 | 위치 | import | 역할 |
+|---|---|---|---|
+| 진입점 | 루트 (`main.py`·`doctor.py`·`app.py`·`watcher.py`·`export.py`·`enroll.py`) | `python <파일>.py` 로 실행 | CLI·웹UI·폴더감시 |
+| 설정 | 루트 `config.py` | `from config import load_config` | `.env` 로드·검증 |
+| 공통 유틸 | `meeting_record/` | `from meeting_record.X import ...` | console UTF-8, cli 등 횡단 관심사 |
+| 기능 모듈 | `src/` | `from src.X import ...` | audio·transcriber·summarizer·storage·g5_client 등 |
+
+**규칙**: 새 코드는 위 패턴을 따릅니다.
+- `src` 모듈끼리도 `from src.X import ...`(절대 import) 사용.
+- 서브패키지 내부(예: `src/summarizer/`)**에서만** 상대 import(`from .parsing import ...`).
+- `config`·`meeting_record`는 **진입점에서만** 직접 import (기능 모듈은 설정을 인자로 받음).
 
 ### Apache가 접근하는 방식
 
