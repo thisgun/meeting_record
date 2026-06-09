@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-09
+
+### 추가
+- 회의록 업로드 **품질 게이트**: STT/화자 분리 품질이 낮으면 G5 자동 업로드를 차단하고 로컬 저장만
+  (`QUALITY_CHECK`, `QUALITY_BLOCK_UPLOAD`, `main.py --force-upload`)
+- **개인정보(PII) 마스킹**을 `.env.example`/README에 노출 + `partial` 권장(새 설치 기본).
+  실행 시 활성 레벨 표시(off면 콘솔 경고).
+
+### 변경
+- **STT 발화 캐시 키에 `WHISPER_MODEL`/언어 포함** → 모델을 바꾸면 같은 음원도 자동 재전사
+  (이제 `data/work`를 수동으로 지울 필요 없음).
+
+### 리팩터링 (동작 보존, 테스트로 검증)
+- **800줄 초과 god-file 4개 분리**: `summarizer/`·`storage/` 패키지화,
+  `main.py`·`app.py` 헬퍼 추출 → 전부 800줄 이하. 기존 import/호출 하위 호환 유지.
+- 모듈 구조 **3계층 import 규칙**(루트 진입점 · `config` · `meeting_record` · `src`) 문서화.
+
+### 테스트
+- 단위 테스트 **69 → 109개**: summarizer 파싱/청킹, storage, stats·comparator·exporter·
+  audio·runtime_memory·notifier·app_auth·whisper_prompt·idempotency·cache.
+
 ## [0.4.0] - 2026-06-05
 
 ### 추가
