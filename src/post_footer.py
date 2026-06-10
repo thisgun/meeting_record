@@ -26,12 +26,16 @@ def format_processing_footer(
     speaker_count: int,
     utterance_count: int,
 ) -> str:
-    """summary_md 끝에 덧붙일 처리 정보 마크다운 푸터(앞에 구분선 포함)."""
+    """summary_md 끝에 덧붙일 처리 정보 마크다운 푸터(앞에 구분선 포함).
+
+    이모지(4바이트)를 쓰지 않는다 — 구형 그누보드/cafe24의 utf8(3바이트) 테이블에
+    4바이트 문자를 넣으면 게시글 저장이 실패하거나 잘릴 수 있기 때문. 텍스트 라벨만 사용.
+    """
     return (
         "\n\n---\n"
-        f"*🎙 오디오 {format_hms(duration_sec)} · "
-        f"⏱ 처리 {format_hms(elapsed_sec)} · "
-        f"🗣 화자 {speaker_count}명 · "
-        f"💬 발화 {utterance_count}건 · "
-        f"🤖 Whisper {whisper_model}*"
+        f"*오디오 {format_hms(duration_sec)} · "
+        f"처리 {format_hms(elapsed_sec)} · "
+        f"화자 {speaker_count}명 · "
+        f"발화 {utterance_count}건 · "
+        f"모델 Whisper {whisper_model}*"
     )

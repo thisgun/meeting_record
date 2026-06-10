@@ -345,6 +345,33 @@ def mark_meeting_upload_blocked(
         )
 
 
+def approve_blocked_meeting(db_path: str | Path, meeting_id: int) -> bool:
+    """품질 게이트로 차단(blocked)된 회의를 업로드 대기(pending)로 되돌린다.
+
+    meeting과 그 sync 타겟들의 'blocked' 상태를 'pending'으로 풀어 이후 resync가
+    저장된 요약/발화 그대로 업로드할 수 있게 한다(파일 재처리·DB 중복 없이).
+
+    Returns:
+        True  — 차단돼 있던 회의를 승인함
+        False — 해당 id가 없거나 blocked 상태가 아니었음
+    """
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE meetings SET sync_status = 'pending', sync_error = NULL "
+            "WHERE id = ? AND sync_status = 'blocked'",
+            (int(meeting_id),),
+        )
+        approved = cur.rowcount > 0
+        if approved:
+            conn.execute(
+                "UPDATE meeting_sync_targets SET sync_status = 'pending', sync_error = NULL "
+                "WHERE meeting_id = ? AND sync_status = 'blocked'",
+                (int(meeting_id),),
+            )
+    return approved
+
+
 def mark_utterance_synced(
     db_path: str | Path,
     utterance_id: int,

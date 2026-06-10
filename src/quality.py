@@ -295,8 +295,15 @@ def analyze_segments(segments: list[dict], *, duration_sec: float) -> QualityRep
         ))
 
     if _report_severity(issues) != "danger":
-        warning_count = sum(1 for issue in issues if issue.severity == "warning")
-        if warning_count >= 2:
+        # 화자 분포 경고(단일화자/한 명 편중)는 1인 강의·인터뷰·보고 녹음처럼 정상일 수
+        # 있으므로 danger 승격 산정에서 제외한다. 실제로 본문이 망가졌다는 강한 신호
+        # (반복 환각·무음·신뢰도 붕괴·텍스트량 부족)만 2개 이상 겹칠 때 danger로 올린다.
+        soft_codes = {"single_speaker_long", "dominant_speaker"}
+        strong_warnings = sum(
+            1 for issue in issues
+            if issue.severity == "warning" and issue.code not in soft_codes
+        )
+        if strong_warnings >= 2:
             issues.append(QualityIssue(
                 "combined_quality_risk",
                 "danger",

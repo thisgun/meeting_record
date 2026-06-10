@@ -37,6 +37,17 @@ def test_format_processing_footer_contains_all_fields():
     assert "Whisper large-v3" in footer
 
 
+def test_footer_has_no_4byte_chars_for_utf8_db_safety():
+    """구형 그누보드/cafe24의 utf8(3바이트) 테이블에서 게시글이 깨지지 않도록
+    푸터에는 4바이트 문자(이모지 등)가 없어야 한다."""
+    footer = post_footer.format_processing_footer(
+        duration_sec=1710, elapsed_sec=252, whisper_model="large-v3",
+        speaker_count=5, utterance_count=312,
+    )
+    four_byte = [ch for ch in footer if len(ch.encode("utf-8")) >= 4]
+    assert four_byte == [], f"4바이트 문자 발견(utf8 DB에서 깨질 수 있음): {four_byte}"
+
+
 def test_footer_appends_cleanly_to_markdown():
     body = "# 제목\n\n요약 내용"
     footer = post_footer.format_processing_footer(

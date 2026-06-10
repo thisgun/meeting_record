@@ -191,8 +191,20 @@ def run_pipeline(
     print(f"[info] DEVICE={cfg.device}, compute_type={cfg.whisper_compute_type}")
 
     # 2) STT + 화자 분리 (캐시 사용 가능)
+    # Whisper initial_prompt(사전 + 파일명 힌트)를 캐시 키 산정 전에 미리 만든다.
+    # VAD/condition/prompt 등 STT 결과를 바꾸는 설정이 바뀌면 캐시도 분리되도록.
+    source_terms = _source_terms_from_filename(src_path)
+    whisper_prompt = _combine_whisper_prompt(
+        dictionary.build_whisper_prompt(cfg.db_path),
+        source_terms,
+    )
     cache_path = cache.segments_cache_path(
-        src_path, cfg.work_dir, model=cfg.whisper_model, language=cfg.whisper_language)
+        src_path, cfg.work_dir,
+        model=cfg.whisper_model, language=cfg.whisper_language,
+        vad_filter=cfg.whisper_vad_filter,
+        condition_on_previous_text=cfg.whisper_condition_on_previous_text,
+        prompt=whisper_prompt,
+    )
     # --speakers 또는 --rediarize가 지정되면 캐시의 화자 라벨은 무시하고 재분리
     rediarize_only = cache_path.exists() and (num_speakers is not None or rediarize)
     if cache_path.exists() and not rediarize_only:
@@ -242,12 +254,7 @@ def run_pipeline(
                     f"음성 인식 + 화자 분리 (Whisper {cfg.whisper_model}, 분리: {diarize_mode})")
         print("    ※ CPU 환경에서는 오래 걸립니다 (1분 오디오당 2~4분).")
         t0 = time.time()
-        # 사전의 용어들을 Whisper에게 미리 알림 (정확도 ↑)
-        source_terms = _source_terms_from_filename(src_path)
-        whisper_prompt = _combine_whisper_prompt(
-            dictionary.build_whisper_prompt(cfg.db_path),
-            source_terms,
-        )
+        # whisper_prompt는 위 캐시 키 산정 시 이미 계산됨 (사전 + 파일명 힌트)
         if source_terms:
             print(f"    → 파일명 힌트 적용: {', '.join(source_terms[:8])}")
         segments = transcriber.transcribe_and_diarize(
@@ -713,6 +720,30 @@ def show_meeting(meeting_id: int) -> int:
     return 0
 
 
+def approve_meeting(meeting_id: int) -> int:
+    """품질 게이트로 차단된 회의를 사람이 확인 후 승인 → 저장된 내용 그대로 업로드.
+
+    파일을 다시 처리하지 않으므로 DB 중복이 생기지 않는다.
+    """
+    cfg = load_config()
+    storage.init_db(cfg.db_path)
+    data = storage.get_meeting(cfg.db_path, meeting_id)
+    if not data:
+        print(f"meeting_id={meeting_id} 없음", file=sys.stderr)
+        return 1
+
+    approved = storage.approve_blocked_meeting(cfg.db_path, meeting_id)
+    title = (data.get("meeting") or {}).get("title", "")
+    if not approved:
+        status = (data.get("meeting") or {}).get("sync_status", "?")
+        print(f"meeting_id={meeting_id}({title})는 차단(blocked) 상태가 아닙니다 "
+              f"(현재: {status}). 승인할 것이 없습니다.")
+        return 0
+
+    print(f"meeting_id={meeting_id}({title}) 승인 → 업로드 대기로 전환. 업로드를 시작합니다.")
+    return resync_failed()
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_utf8_stdio()
 
@@ -734,11 +765,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="DB에서 회의 조회")
     parser.add_argument("--resync", action="store_true",
                         help="업로드 실패한 회의 재전송")
+    parser.add_argument("--approve", type=int, metavar="MEETING_ID",
+                        help="품질 게이트로 차단된 회의를 승인하고 저장된 내용 그대로 업로드 "
+                             "(파일 재처리·DB 중복 없음)")
 
     args = parser.parse_args(argv)
 
     if args.show is not None:
         return show_meeting(args.show)
+
+    if args.approve is not None:
+        return approve_meeting(args.approve)
 
     if args.resync:
         return resync_failed()

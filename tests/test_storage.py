@@ -32,6 +32,41 @@ def test_save_search_and_sync_target(tmp_path: Path) -> None:
     assert storage.get_meeting_target(db_path, meeting_id, "ci")["sync_status"] == "synced"
 
 
+def test_approve_blocked_meeting_makes_it_resyncable(tmp_path: Path) -> None:
+    db_path = tmp_path / "meetings.db"
+    meeting_id = storage.save_meeting(
+        db_path,
+        source_file="blocked.mp3",
+        title="차단된 회의",
+        summary_md="## 요약\n- 내용",
+        duration_sec=600,
+        utterances=[{"speaker": "사용자1", "start": 0, "end": 2, "text": "안녕"}],
+    )
+
+    # 품질 게이트가 차단
+    storage.mark_meeting_upload_blocked(
+        db_path, meeting_id, "품질 낮음", target_names=["ci"],
+    )
+    # blocked는 resync 대상에서 제외된다
+    assert all(
+        m["id"] != meeting_id
+        for m in storage.list_unsynced(db_path, target_names=["ci"])
+    )
+
+    # 사람이 확인 후 승인 → pending 전환
+    assert storage.approve_blocked_meeting(db_path, meeting_id) is True
+    # 이제 resync 대상에 포함된다 (파일 재처리 없이 업로드 가능)
+    assert any(
+        m["id"] == meeting_id
+        for m in storage.list_unsynced(db_path, target_names=["ci"])
+    )
+
+    # 이미 pending이면 더 승인할 것이 없다
+    assert storage.approve_blocked_meeting(db_path, meeting_id) is False
+    # 없는 id도 False
+    assert storage.approve_blocked_meeting(db_path, 99999) is False
+
+
 class _FakeCursor:
     def fetchall(self):
         return []

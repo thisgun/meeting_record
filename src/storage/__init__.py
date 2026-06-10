@@ -46,6 +46,7 @@ from .sync import (
     _upsert_meeting_target,
     _upsert_utterance_target,
     adopt_default_sync_target,
+    approve_blocked_meeting,
     get_meeting_target,
     get_utterance_target,
     list_meeting_targets,
@@ -72,6 +73,7 @@ __all__ = [
     "mark_meeting_posted", "mark_meeting_synced", "mark_meeting_post_updated",
     "mark_meeting_partial", "mark_meeting_failed", "mark_meeting_upload_blocked",
     "mark_utterance_synced", "mark_utterance_failed", "adopt_default_sync_target",
+    "approve_blocked_meeting",
     # 검색
     "search_meetings", "search_utterances",
 ]
