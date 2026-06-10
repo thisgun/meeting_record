@@ -204,7 +204,7 @@ def load_config() -> Config:
     return Config(
         huggingface_token=os.getenv("HUGGINGFACE_TOKEN", ""),
         ollama_host=_validated_ollama_host(),
-        ollama_model=os.getenv("OLLAMA_MODEL", "gemma4:e2b"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "gemma4:e2b-it-qat"),
         ollama_keep_alive=_clean_env_value(os.getenv("OLLAMA_KEEP_ALIVE", "0")) or "0",
         ollama_num_ctx_max=_int_env("OLLAMA_NUM_CTX_MAX", 32768, minimum=4096),
         ollama_num_predict=_int_env("OLLAMA_NUM_PREDICT", 8192, minimum=1024),
