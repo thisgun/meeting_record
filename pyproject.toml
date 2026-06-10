@@ -1,6 +1,6 @@
 [project]
 name = "meeting-record"
-version = "0.5.0"
+version = "0.6.0"
 description = "한국어 회의 음성을 자동으로 화자별 분리·요약하여 SQLite와 그누보드5 게시판에 등록"
 readme = "README.md"
 license = { text = "LGPL-2.1-or-later" }
