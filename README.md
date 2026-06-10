@@ -12,6 +12,16 @@
 
 ### 1. Python 파이프라인 (회의 처리)
 
+Windows에서 처음 설치한다면 아래 절차를 먼저 권장합니다. `.env` 생성, 전용 venv 생성, Python 패키지 설치, ffmpeg/Ollama 확인, 모델 다운로드, `doctor.py` 진단까지 순서대로 안내합니다.
+
+```cmd
+git clone https://github.com/thisgun/meeting_record.git
+cd meeting_record
+setup.bat
+```
+
+모델 다운로드를 나중에 하고 싶으면 `setup.bat --skip-models`를 사용하세요. 이미 직접 설치하고 싶거나 macOS/Linux라면 아래 수동 절차를 그대로 따라가면 됩니다.
+
 ```powershell
 git clone https://github.com/thisgun/meeting_record.git
 cd meeting_record
@@ -202,6 +212,7 @@ python -m streamlit run app.py
 meeting_record/
 │
 ├── main.py                    # CLI 진입점 (그 외: doctor.py, app.py, watcher.py, export.py, enroll.py)
+├── setup.bat                  # Windows 초보자용 설치 도우미
 ├── config.py                  # .env 파일 로드 및 검증
 ├── meeting_record/            # 공통 유틸 패키지 (console UTF-8 stdio, cli)
 ├── requirements.txt           # Python 패키지 목록
@@ -217,6 +228,7 @@ meeting_record/
 │   └── g5_client.py           # 그누보드5 API 호출
 │
 ├── scripts/
+│   ├── setup_windows.ps1      # setup.bat 내부 설치 로직
 │   └── download_models.py     # AI 모델 사전 다운로드
 │
 ├── data/                      # 데이터 저장소 (git 무시)

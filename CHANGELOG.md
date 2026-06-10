@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 추가
+- Windows 초보자용 `setup.bat` / `scripts/setup_windows.ps1` 설치 도우미 추가.
+  `.env` 생성, venv 구성, 패키지 설치, ffmpeg/Ollama 확인, 모델 다운로드, `doctor.py` 실행을 순서대로 안내.
+
 ## [0.6.0] - 2026-06-10
 
 ### 추가
