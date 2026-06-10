@@ -79,14 +79,19 @@ python -m streamlit run app.py
 
 ## 목차
 
-1. [이게 뭐 하는 프로그램인가요?](#1-이게-뭐-하는-프로그램인가요)
+- [빠른 시작](#빠른-시작) — 설치 4단계 (Python · 플러그인 · 웹 UI)
+- [필수 외부 의존성](#필수-외부-의존성)
+
+**상세 매뉴얼**
+
+1. [이게 뭐 하는 프로그램인가요?](#1-이게-뭐-하는-프로그램인가요) — 사용 시나리오 · 제작 배경
 2. [전체 시스템 구조](#2-전체-시스템-구조)
-3. [디렉토리 구조 상세](#3-디렉토리-구조-상세)
+3. [디렉토리 구조 상세](#3-디렉토리-구조-상세) — 모듈 3계층 import 규칙
 4. [데이터 흐름 (실행 순서)](#4-데이터-흐름-실행-순서)
 5. [핵심 용어 정리](#5-핵심-용어-정리)
-6. [환경 구성](#6-환경-구성)
-7. [실행 방법](#7-실행-방법)
-8. [자주 발생하는 문제 (트러블슈팅)](#8-자주-발생하는-문제-트러블슈팅)
+6. [환경 구성](#6-환경-구성) — 요구사항 · AI 모델 · `.env` 환경변수
+7. [실행 방법](#7-실행-방법) — CLI 옵션 · **pyannote 화자분리** · 품질 게이트 · 처리 시간 · **GPU(CUDA) 가속**
+8. [자주 발생하는 문제 (트러블슈팅)](#8-자주-발생하는-문제-트러블슈팅) — ffmpeg · Ollama · 요약 잘림 · 업로드 등 11건
 9. [운영 시 점검 사항](#9-운영-시-점검-사항)
 
 ---
@@ -108,6 +113,38 @@ python -m streamlit run app.py
    - 사내 게시판(그누보드5)에 자동 등록
 
 이 모든 걸 한 번의 명령으로 처리합니다.
+
+### 결과 예시
+
+`python main.py "산업안전_회의.mp3"` 한 줄을 실행하면, 이런 회의록이 자동 생성되어 SQLite와
+그누보드5 게시판에 등록됩니다 (실제 출력 형식):
+
+```markdown
+# 산업안전 강화 및 중대재해 감축 방안 논의
+
+## 개요
+대규모 행사 안전, 중대재해 감축, 산재 은폐 의혹 조사를 의제로 진행. 태양광 설치 추락·
+지게차 사고 사례를 분석하고 재발 방지 대책(AI 예방 시스템·드론 모니터링·다국어 교육)을 논의.
+
+## 주요 논의
+- 위험 격차 해소를 위한 소규모 사업장 밀착 점검 강화
+- 지붕·태양광 작업 시 견고한 덮개 설치 의무, 개·보수 단계 중점 관리
+- 안전한 일터 지킴이 인력 활용한 상시 순찰 체계
+
+## 결정 사항
+- 이동통로와 지게차 주행로를 난간으로 물리 분리, 건널목 설치
+- 다국적 언어 교육 교재 번역·더빙 완료, 국적별 안전 리더 지정
+
+---
+*🎙 오디오 1시간 46분 50초 · ⏱ 처리 10분 8초 · 🗣 화자 2명 · 💬 발화 125건 · 🤖 Whisper large-v3*
+```
+
+발화 하나하나는 게시글 **댓글**로 화자·시간과 함께 등록됩니다 (예: `[02:41] 사용자1: 지금부터
+회의를 시작하겠습니다…`). 본문 맨 아래 한 줄은 처리 정보 푸터로, `.env`의
+`POST_PROCESSING_FOOTER=0`으로 끌 수 있습니다.
+
+> 📷 **스크린샷을 추가하려면**: 웹 UI나 그누보드5 게시글 화면을 캡처해 `docs/img/`에 넣고
+> 여기에 `![설명](docs/img/파일명.png)`으로 링크하세요. (이 저장소엔 기본 이미지를 포함하지 않습니다.)
 
 ### 왜 만들었나?
 
@@ -326,16 +363,21 @@ C:\xampp\htdocs\gnuboard5\plugin\meeting_api\
 
 ## 6. 환경 구성
 
-### 운영 환경 (현재 설치 완료)
+### 요구사항
 
-| 구성 요소 | 버전 | 위치 |
-|-----------|------|------|
-| Windows 11 Pro | - | - |
-| Python | 3.13.3 | `C:\Python313` |
-| ffmpeg | 8.1.1 | PATH에 등록됨 (winget 설치) |
-| XAMPP (Apache + MariaDB + PHP) | PHP 8.2.12, MariaDB 10.4.32 | `C:\xampp\` |
-| Ollama | 0.23.1 | 서비스로 실행 중 |
-| gemma4:e2b-it-qat 모델 | 4.3GB | Ollama가 관리 (기본 요약 모델) |
+| 구성 요소 | 요구 / 권장 |
+|-----------|-------------|
+| OS | Windows 10·11 · macOS · Linux (모두 지원) |
+| Python | **3.10 이상** (3.11~3.13 권장) |
+| ffmpeg | 필수 — Windows `winget install Gyan.FFmpeg` · macOS `brew install ffmpeg` · Linux `apt install ffmpeg` |
+| Ollama | 최신 버전 권장 (로컬 요약 LLM 실행) |
+| 요약 모델 | `gemma4:e2b-it-qat` (4.3GB, 기본) — `ollama pull gemma4:e2b-it-qat` |
+| GPU (선택) | NVIDIA + CUDA면 수십 배 가속. **VRAM 8GB**면 기본 모델이 100% GPU 적재 |
+| 그누보드5 (선택) | 게시판 자동 등록 시. XAMPP·cafe24 등 PHP 호스팅 (없으면 `--no-upload`) |
+
+> 📌 위 표는 **요구사항**이며 특정 버전 강제가 아닙니다. **개발·검증 환경(참고)**: Windows 11 ·
+> Python 3.11 · RTX 4060 8GB(CUDA 12.8) · XAMPP(PHP 8.2, MariaDB 10.4). 다른 OS·GPU·CPU
+> 전용 환경에서도 동작하도록 설계됐습니다(`python doctor.py`로 내 환경을 진단하세요).
 
 ### Python 패키지 (requirements.txt)
 
@@ -730,7 +772,7 @@ python -m streamlit run app.py
 ```powershell
 python -m streamlit run app.py --server.address 0.0.0.0
 ```
-→ `http://<PC-IP>:8501` 로 접속 (예: `http://192.168.45.246:8501`)
+→ `http://<PC-IP>:8501` 로 접속 (예: `http://192.168.0.10:8501` — `<PC-IP>`는 `ipconfig`/`ifconfig`로 확인)
 
 > 외부 접속을 열 때는 `STREAMLIT_ACCESS_PASSWORD`를 반드시 설정하세요. 기본값은 12시간 세션 만료, 5회 실패 시 300초 잠금이며 실패/잠금 상태는 `data/app_auth_state.json`에 저장됩니다. 필요하면 `.env`에서 `STREAMLIT_SESSION_TTL_SEC`, `STREAMLIT_AUTH_MAX_ATTEMPTS`, `STREAMLIT_AUTH_LOCKOUT_SEC`, `STREAMLIT_AUTH_STATE_PATH`를 조정하세요. 로컬 테스트에서만 인증을 끄려면 `.env`에 `STREAMLIT_ALLOW_NO_AUTH=1`을 명시합니다. 인터넷에 공개해야 한다면 앱 비밀번호만 믿지 말고 VPN, Cloudflare Access, Nginx/Apache Basic Auth 같은 앞단 인증을 함께 두는 것을 권장합니다.
 
@@ -1299,10 +1341,14 @@ python watcher.py --scan-now    # 폴더의 기존 파일만 처리 후 종료
 
 **원인**: ffmpeg가 설치되지 않았거나 PATH에 없음.
 
-**해결**:
+**해결** (OS별 설치):
 ```powershell
+# Windows
 winget install Gyan.FFmpeg --source winget
-# 새 PowerShell 창에서:
+# macOS:  brew install ffmpeg
+# Linux:  sudo apt install ffmpeg   (또는 배포판 패키지 매니저)
+
+# 설치 후 새 터미널에서 확인:
 ffmpeg -version
 ```
 
