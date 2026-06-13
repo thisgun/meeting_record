@@ -19,12 +19,27 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+
+AI_TYPO_SYSTEM_PROMPT = """당신은 한국어 STT 오타 교정기입니다.
+
+규칙:
+1. 요약, 문체 개선, 순화, 검열, 재작성은 금지합니다.
+2. 명백한 STT 오인식/오타/띄어쓰기 오류만 고칩니다.
+3. 말투, 욕설, 농담, 방언, 고유명사는 확실하지 않으면 그대로 둡니다.
+4. 입력 items의 개수와 i 값을 그대로 유지합니다.
+5. 응답은 반드시 JSON 객체 하나만 출력합니다.
+
+스키마:
+{"items":[{"i":0,"text":"교정된 텍스트"}]}
+"""
 
 
 DICT_SCHEMA = """
@@ -167,16 +182,177 @@ def apply_replacements(db_path: str | Path, text: str, scope: str = "global") ->
     return text
 
 
-def apply_to_segments(db_path: str | Path, segments: list[dict], scope: str = "global") -> tuple[list[dict], int]:
+def parse_inline_rules(raw: str) -> list[tuple[str, str]]:
+    """Parse literal typo correction rules from env.
+
+    Format: "wrong=>right;wrong2=>right2". Rules are literal string
+    replacements, not regular expressions.
+    """
+    rules: list[tuple[str, str]] = []
+    for item in re.split(r"[;\n]+", raw or ""):
+        item = item.strip()
+        if not item or "=>" not in item:
+            continue
+        wrong, right = item.split("=>", 1)
+        wrong = wrong.strip()
+        right = right.strip()
+        if wrong:
+            rules.append((wrong, right))
+    return rules
+
+
+def apply_inline_rules(text: str, rules: list[tuple[str, str]]) -> str:
+    """Apply literal typo correction rules."""
+    for wrong, right in rules:
+        text = text.replace(wrong, right)
+    return text
+
+
+def apply_to_segments(
+    db_path: str | Path,
+    segments: list[dict],
+    scope: str = "global",
+    *,
+    enabled: bool = True,
+    inline_rules: str = "",
+) -> tuple[list[dict], int]:
     """발화 리스트의 텍스트에 치환 적용. (수정된 segments, 변경된 발화 수) 반환."""
+    if not enabled:
+        return [dict(seg) for seg in segments], 0
+
+    parsed_inline_rules = parse_inline_rules(inline_rules)
     out = []
     changed = 0
     for seg in segments:
         original = seg.get("text", "")
         new_text = apply_replacements(db_path, original, scope=scope)
+        if parsed_inline_rules:
+            new_text = apply_inline_rules(new_text, parsed_inline_rules)
         if new_text != original:
             changed += 1
         out.append({**seg, "text": new_text})
+    return out, changed
+
+
+def _extract_json_object(raw: str) -> dict:
+    raw = (raw or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError(f"JSON 객체를 찾지 못했습니다: {raw[:200]}")
+    return json.loads(raw[start:end + 1])
+
+
+def _safe_ai_text(original: str, corrected: str) -> str:
+    corrected = str(corrected or "").strip()
+    if not corrected:
+        return original
+    # 오타 보정이 아니라 재작성/확장처럼 보이면 원문 보존.
+    max_len = max(len(original) * 2 + 20, 40)
+    if len(corrected) > max_len:
+        return original
+    return corrected
+
+
+def parse_ai_correction_response(raw: str, originals: list[str]) -> list[str]:
+    """Parse an Ollama typo-correction response and preserve unsafe items."""
+    data = _extract_json_object(raw)
+    items = data.get("items")
+    if not isinstance(items, list):
+        raise ValueError("items 배열이 없습니다")
+
+    corrected = list(originals)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("i"))
+        except Exception:
+            continue
+        if idx < 0 or idx >= len(originals):
+            continue
+        corrected[idx] = _safe_ai_text(originals[idx], str(item.get("text") or ""))
+    return corrected
+
+
+def _ollama_typo_correct_texts(
+    texts: list[str],
+    *,
+    host: str,
+    model: str,
+    timeout: float,
+    keep_alive: str,
+    max_ctx: int,
+) -> list[str]:
+    from ollama import Client
+
+    items = [{"i": i, "text": text} for i, text in enumerate(texts)]
+    user_msg = (
+        "다음 STT 발화 텍스트의 명백한 오타만 교정하세요. "
+        "입력 순서와 i 값을 유지하고 JSON만 반환하세요.\n\n"
+        + json.dumps({"items": items}, ensure_ascii=False)
+    )
+    client = Client(host=host, timeout=timeout)
+    response = client.chat(
+        model=model,
+        messages=[
+            {"role": "system", "content": AI_TYPO_SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg},
+        ],
+        options={
+            "temperature": 0,
+            "num_ctx": max(4096, min(int(max_ctx), 8192)),
+            "num_predict": 4096,
+        },
+        format="json",
+        keep_alive=keep_alive,
+        stream=False,
+    )
+    if isinstance(response, dict):
+        content = response.get("message", {}).get("content", "")
+    else:
+        message = getattr(response, "message", None)
+        content = getattr(message, "content", "") if message is not None else ""
+    return parse_ai_correction_response(content, texts)
+
+
+def apply_ai_correction_to_segments(
+    segments: list[dict],
+    *,
+    host: str,
+    model: str,
+    timeout: float,
+    keep_alive: str = "0",
+    max_ctx: int = 32768,
+    chunk_size: int = 30,
+) -> tuple[list[dict], int]:
+    """Use local Ollama to correct only obvious STT typos in segment text."""
+    if not segments:
+        return [], 0
+
+    out = [dict(seg) for seg in segments]
+    changed = 0
+    chunk_size = max(1, int(chunk_size))
+    for start in range(0, len(out), chunk_size):
+        end = min(start + chunk_size, len(out))
+        chunk = out[start:end]
+        originals = [str(seg.get("text") or "") for seg in chunk]
+        if not any(text.strip() for text in originals):
+            continue
+        corrected = _ollama_typo_correct_texts(
+            originals,
+            host=host,
+            model=model,
+            timeout=timeout,
+            keep_alive=keep_alive,
+            max_ctx=max_ctx,
+        )
+        for offset, (original, new_text) in enumerate(zip(originals, corrected)):
+            if new_text != original:
+                out[start + offset]["text"] = new_text
+                changed += 1
     return out, changed
 
 

@@ -3,29 +3,40 @@
 사용:
     python scripts/check_g5_remote.py                    # 모든 타겟 점검
     python scripts/check_g5_remote.py --target remote    # 특정 타겟만
+    python scripts/check_g5_remote.py --cleanup-stale    # 오래된 연결 테스트 글 정리 후 점검
+    python scripts/check_g5_remote.py --cleanup-only     # 오래된 연결 테스트 글만 정리
 
 각 타겟에 대해:
 1. health.php 응답 확인
 2. 게시판 존재 여부
-3. 인증 동작 (post 시도, 즉시 삭제)
+3. 인증/쓰기 동작 (post/comment/update/list/delete 시도)
 """
 from __future__ import annotations
 
 import argparse
-import json
 import sys
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src.g5_client import build_clients_from_env
 
 
 def main() -> int:
+    configure_utf8_stdio()
     p = argparse.ArgumentParser()
     p.add_argument("--target", help="특정 타겟 이름만 점검 (예: remote)")
+    p.add_argument("--cleanup-stale", action="store_true", help="오래된 연결 테스트 글을 정리한 뒤 점검")
+    p.add_argument("--cleanup-only", action="store_true", help="오래된 연결 테스트 글만 정리하고 쓰기 테스트는 생략")
+    p.add_argument("--cleanup-minutes", type=int, default=60, help="이 분보다 오래된 테스트 글만 정리 (기본 60)")
+    p.add_argument("--cleanup-limit", type=int, default=50, help="타겟당 최대 정리 글 수 (기본 50, 최대 100)")
+    p.add_argument("--cleanup-dry-run", action="store_true", help="삭제하지 않고 정리 대상만 표시")
     args = p.parse_args()
+    if args.cleanup_only:
+        args.cleanup_stale = True
 
     cfg = load_config()
     clients = build_clients_from_env(cfg)
@@ -66,19 +77,69 @@ def main() -> int:
             fail += 1
             continue
 
-        # 2. 인증 동작 확인 (post + comment, 즉시 삭제는 사용자 수동)
-        print(f"\n시도: 테스트 게시글 1건 작성 (확인 후 수동 삭제 권장)")
+        if args.cleanup_stale:
+            try:
+                cleaned = c.cleanup_test_posts(
+                    older_than_minutes=max(0, args.cleanup_minutes),
+                    limit=max(1, min(100, args.cleanup_limit)),
+                    dry_run=args.cleanup_dry_run,
+                )
+                mode = "대상 확인" if args.cleanup_dry_run else "정리"
+                print(
+                    f"  ✓ 오래된 연결 테스트 글 {mode}: "
+                    f"matched={cleaned.get('matched')}, "
+                    f"deleted_posts={cleaned.get('deleted_posts')}, "
+                    f"deleted_comments={cleaned.get('deleted_comments')}"
+                )
+                for item in (cleaned.get("candidates") or [])[:10]:
+                    print(f"    - wr_id={item.get('wr_id')} / {item.get('datetime')} / {item.get('subject')}")
+            except Exception as e:
+                print(f"  ✗ 오래된 연결 테스트 글 정리 실패: {e}")
+                fail += 1
+                if args.cleanup_only:
+                    continue
+
+        if args.cleanup_only:
+            continue
+
+        # 2. 인증 동작 확인 (post + comment + update + list + delete)
+        print(f"\n시도: 테스트 게시글 1건 작성 후 자동 삭제")
+        wr_id = None
+        run_id = uuid.uuid4().hex[:12]
         try:
             post = c.create_post(
-                subject="[연결 테스트] 삭제해 주세요",
-                content="g5_meeting_api 연결 점검용. 확인 후 삭제하세요.",
+                subject=f"[연결 테스트] 자동 삭제 예정 ({run_id})",
+                content=f"g5_meeting_api 연결 점검용. 곧 자동 삭제됩니다.\nrun_id={run_id}",
+                idempotency_key=f"meeting_record:check_g5_remote:post:{c.name}:{run_id}",
             )
             wr_id = post["wr_id"]
             print(f"  ✓ 게시글 생성 OK: wr_id={wr_id}")
             print(f"  → 게시판 URL: {post.get('url')}")
+            c.update_post(wr_id, subject="[연결 테스트] 수정 확인", content="게시글 수정 API 확인.")
+            print(f"  ✓ 게시글 수정 OK")
+            comment = c.create_comment(
+                wr_id,
+                f"댓글 생성 API 확인. run_id={run_id}",
+                idempotency_key=f"meeting_record:check_g5_remote:comment:{c.name}:{run_id}",
+            )
+            comment_id = comment["comment_id"]
+            print(f"  ✓ 댓글 생성 OK: comment_id={comment_id}")
+            c.update_comment(comment_id, content="댓글 수정 API 확인.", author_name="회의_점검")
+            print(f"  ✓ 댓글 수정 OK")
+            comments = c.list_comments(wr_id)
+            print(f"  ✓ 댓글 목록 OK: {len(comments)}건")
         except Exception as e:
-            print(f"  ✗ 게시글 생성 실패: {e}")
+            print(f"  ✗ 쓰기 API 실패: {e}")
             fail += 1
+        finally:
+            if wr_id:
+                try:
+                    c.delete_post(wr_id)
+                    print(f"  ✓ 테스트 게시글 삭제 OK")
+                except Exception as e:
+                    print(f"  ⚠️ 테스트 게시글 자동 삭제 실패: wr_id={wr_id}, run_id={run_id}, {e}")
+                    print("     게시판에서 위 wr_id의 '[연결 테스트]' 글을 수동 삭제하세요.")
+                    fail += 1
 
     print(f"\n{'='*60}")
     if fail == 0:

@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
+_WARNED_CONFIG_VALUES: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,14 @@ class Config:
     huggingface_token: str
     ollama_host: str
     ollama_model: str
+    ollama_keep_alive: str
+    ollama_num_ctx_max: int
+    ollama_num_predict: int
+    ollama_num_gpu: int | None
+    ollama_timeout_sec: int
+    ollama_summary_chunk_sec: int
+    ollama_min_free_ram_gib: float
+    ollama_memory_wait_sec: int
     device: str                       # "cpu" | "cuda" (auto는 load_config에서 해석됨)
     whisper_model: str
     whisper_compute_type: str
@@ -22,6 +31,15 @@ class Config:
     whisper_cpu_threads: int
     whisper_batch_size: int
     whisper_vad_filter: bool
+    whisper_condition_on_previous_text: bool
+    typo_correction_enabled: bool
+    typo_correction_rules: str
+    typo_correction_ai_enabled: bool
+    typo_correction_ai_model: str
+    typo_correction_ai_chunk_size: int
+    quality_check_enabled: bool
+    quality_block_upload: bool
+    post_processing_footer: bool
     g5_api_base: str
     g5_api_token: str
     g5_bo_table: str
@@ -44,6 +62,84 @@ def _path(env_key: str, default: str) -> Path:
     if env_key != "DB_PATH":
         p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _clean_env_value(value: str | None) -> str:
+    raw = (value or "").strip()
+    if "#" in raw:
+        raw = raw.split("#", 1)[0].strip()
+    return raw
+
+
+def _warn_once(key: str, message: str) -> None:
+    if key in _WARNED_CONFIG_VALUES:
+        return
+    _WARNED_CONFIG_VALUES.add(key)
+    print(message)
+
+
+def _int_env(env_key: str, default: int, *, minimum: int | None = None) -> int:
+    raw = _clean_env_value(os.getenv(env_key))
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        _warn_once(env_key, f"[warn] {env_key}='{raw}' 값이 정수가 아님 → {default} 사용")
+        return default
+    if minimum is not None and value < minimum:
+        _warn_once(env_key, f"[warn] {env_key}={value} 값이 너무 작음 → {minimum} 사용")
+        return minimum
+    return value
+
+
+def _float_env(env_key: str, default: float, *, minimum: float | None = None) -> float:
+    raw = _clean_env_value(os.getenv(env_key))
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        _warn_once(env_key, f"[warn] {env_key}='{raw}' 값이 숫자가 아님 → {default} 사용")
+        return default
+    if minimum is not None and value < minimum:
+        _warn_once(env_key, f"[warn] {env_key}={value} 값이 너무 작음 → {minimum} 사용")
+        return minimum
+    return value
+
+
+def _bool_env(env_key: str, default: bool) -> bool:
+    raw = _clean_env_value(os.getenv(env_key))
+    if not raw:
+        return default
+    return raw.lower() not in ("0", "false", "no", "off")
+
+
+def _optional_int_env(
+    env_key: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int | None:
+    raw = _clean_env_value(os.getenv(env_key))
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        _warn_once(env_key, f"[warn] {env_key}='{raw}' 값이 정수가 아님 → 미설정 처리")
+        return None
+    if minimum is not None and value < minimum:
+        _warn_once(env_key, f"[warn] {env_key}={value} 값이 너무 작음 → 미설정 처리")
+        return None
+    if maximum is not None and value > maximum:
+        _warn_once(
+            env_key,
+            f"[warn] {env_key}={value} 값은 저VRAM 환경에서 위험할 수 있어 "
+            "클라이언트 옵션으로 전달하지 않음",
+        )
+        return None
+    return value
 
 
 def _resolve_device(requested: str) -> str:
@@ -113,14 +209,36 @@ def load_config() -> Config:
     return Config(
         huggingface_token=os.getenv("HUGGINGFACE_TOKEN", ""),
         ollama_host=_validated_ollama_host(),
-        ollama_model=os.getenv("OLLAMA_MODEL", "gemma4:e4b"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "gemma4:e2b-it-qat"),
+        ollama_keep_alive=_clean_env_value(os.getenv("OLLAMA_KEEP_ALIVE", "0")) or "0",
+        ollama_num_ctx_max=_int_env("OLLAMA_NUM_CTX_MAX", 32768, minimum=4096),
+        ollama_num_predict=_int_env("OLLAMA_NUM_PREDICT", 8192, minimum=1024),
+        ollama_num_gpu=_optional_int_env("OLLAMA_NUM_GPU", minimum=0, maximum=128),
+        ollama_timeout_sec=_int_env("OLLAMA_TIMEOUT_SEC", 300, minimum=60),
+        ollama_summary_chunk_sec=_int_env("OLLAMA_SUMMARY_CHUNK_SEC", 900, minimum=0),
+        ollama_min_free_ram_gib=_float_env("OLLAMA_MIN_FREE_RAM_GB", 4.0, minimum=0.0),
+        ollama_memory_wait_sec=_int_env("OLLAMA_MEMORY_WAIT_SEC", 30, minimum=0),
         device=device,
-        whisper_model=os.getenv("WHISPER_MODEL", "medium"),
+        whisper_model=os.getenv("WHISPER_MODEL", "small"),
         whisper_compute_type=compute_type,
         whisper_language=os.getenv("WHISPER_LANGUAGE", "ko"),
         whisper_cpu_threads=int(os.getenv("WHISPER_CPU_THREADS", "0")),
         whisper_batch_size=int(os.getenv("WHISPER_BATCH_SIZE", "8")),
         whisper_vad_filter=os.getenv("WHISPER_VAD_FILTER", "1") not in ("0", "false", "False", ""),
+        # 기본 True(=faster-whisper 기본·현행 동작 유지). 음악/잡음 많은 음원에서
+        # 환각·반복이 심하면 0으로 끄면 줄어든다(또렷한 회의는 켜두는 편이 보통 유리).
+        whisper_condition_on_previous_text=os.getenv(
+            "WHISPER_CONDITION_ON_PREVIOUS_TEXT", "1"
+        ) not in ("0", "false", "False", ""),
+        typo_correction_enabled=_bool_env("TYPO_CORRECTION", True),
+        typo_correction_rules=os.getenv("TYPO_CORRECTION_RULES", ""),
+        typo_correction_ai_enabled=_bool_env("TYPO_CORRECTION_AI", False),
+        typo_correction_ai_model=_clean_env_value(os.getenv("TYPO_CORRECTION_AI_MODEL", "")),
+        typo_correction_ai_chunk_size=_int_env("TYPO_CORRECTION_AI_CHUNK_SIZE", 30, minimum=1),
+        quality_check_enabled=_bool_env("QUALITY_CHECK", True),
+        quality_block_upload=_bool_env("QUALITY_BLOCK_UPLOAD", True),
+        # 게시글/요약 본문 하단에 처리 정보(오디오 길이·처리 시간·모델) 푸터 표시
+        post_processing_footer=_bool_env("POST_PROCESSING_FOOTER", True),
         g5_api_base=os.getenv("G5_API_BASE", "").rstrip("/"),
         g5_api_token=os.getenv("G5_API_TOKEN", ""),
         g5_bo_table=os.getenv("G5_BO_TABLE", "meeting"),

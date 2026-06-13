@@ -49,7 +49,7 @@ jobs:
       - name: Python 소스 배포본 ZIP 빌드 (참고용)
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          SRC_ZIP="metting_record-${VERSION}-source.zip"
+          SRC_ZIP="meeting_record-${VERSION}-source.zip"
           # 빌드 산출물/모델 제외
           zip -r "dist/${SRC_ZIP}" \
             . \
@@ -61,6 +61,7 @@ jobs:
             -x "*.pyc" \
             -x ".env" \
             -x "dist/*" \
+            -x "scripts/dev/*" \
             -x "g5_meeting_api/plugin/meeting_api/config.local.php"
           echo "SRC_ZIP=${SRC_ZIP}" >> "$GITHUB_ENV"
           ls -lh dist/
@@ -77,11 +78,17 @@ jobs:
             echo "**Python 파이프라인** (회의록 처리 본체):"
             echo '```bash'
             echo "git clone https://github.com/${{ github.repository }}.git"
-            echo "cd metting_record"
-            echo "pip install -r requirements.txt"
-            echo "python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)"
+            echo "cd meeting_record"
+            echo "python -m venv .venv-meetingrec"
+            echo "source .venv-meetingrec/bin/activate    # Windows: .venv-meetingrec\\Scripts\\activate"
             echo "cp .env.example .env                   # 환경 변수 채우기"
+            echo "python -m pip install --upgrade pip"
+            echo "pip install -r requirements.txt"
+            echo "pip install -e . --no-deps             # 선택: CLI 명령 등록"
+            echo "ollama pull gemma4:e2b                  # 기본 요약 모델"
+            echo "python scripts/download_models.py     # AI 모델 사전 다운로드 (~6GB)"
             echo "python doctor.py                       # 시스템 진단"
+            echo "python main.py \"회의.mp3\" --no-upload # 첫 실행: G5 없이 로컬 저장만"
             echo '```'
             echo ""
             echo "**그누보드5 PHP 플러그인** (게시판 자동 등록):"
@@ -89,8 +96,10 @@ jobs:
             echo "2. 압축 풀면 \`plugin/meeting_api/\` 폴더가 들어있음"
             echo "3. 그 폴더를 그누보드5의 \`plugin/\` 안에 FTP 업로드"
             echo "4. \`config.local.php.example\` → \`config.local.php\` 복사 후 토큰 설정"
-            echo "5. \`https://YOUR-DOMAIN/<gnuboard폴더>/plugin/meeting_api/setup_board.php?token=YOUR_TOKEN\` 1회 호출"
-            echo "6. \`setup_board.php\` 삭제"
+            echo "   - \`setup_board.php\` 실행 시에만 \`meeting_API_ALLOW_SETUP=true\` 설정"
+            echo "   - 선택: \`meeting_API_ALLOWED_IPS\`로 Python 실행 PC/서버 IP만 허용"
+            echo "5. \`curl -X POST -H \"X-API-Token: YOUR_TOKEN\" https://YOUR-DOMAIN/<gnuboard폴더>/plugin/meeting_api/setup_board.php\` 1회 호출"
+            echo "6. \`meeting_API_ALLOW_SETUP=false\`로 되돌리거나 \`setup_board.php\` 삭제"
             echo ""
             echo "### 파일 무결성 확인"
             echo '```'
@@ -113,6 +122,6 @@ jobs:
           files: |
             dist/g5_meeting_api-${{ steps.version.outputs.version }}.zip
             dist/g5_meeting_api-${{ steps.version.outputs.version }}.zip.sha256
-            dist/metting_record-${{ steps.version.outputs.version }}-source.zip
+            dist/meeting_record-${{ steps.version.outputs.version }}-source.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

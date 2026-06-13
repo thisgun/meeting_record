@@ -17,6 +17,10 @@ gnuboard5/
         ├── health.php
         ├── post.php
         ├── comment.php
+        ├── update_post.php
+        ├── list_comments.php
+        ├── update_comment.php
+        ├── delete_post.php
         └── setup_board.php           ← 게시판 자동 생성 후 삭제
 ```
 
@@ -24,9 +28,10 @@ gnuboard5/
 
 1. **FTP 업로드** — `plugin/meeting_api/` 를 그누보드5 plugin 안에 그대로
 2. **운영 토큰 설정** — `config.local.php.example` → `config.local.php` 복사 후 토큰 변경
-3. **게시판 자동 생성** — `https://YOUR-DOMAIN/<그누보드폴더>/plugin/meeting_api/setup_board.php?token=YOUR_TOKEN`
-4. **setup_board.php 삭제** (보안)
-5. **헬스체크** — `https://YOUR-DOMAIN/<그누보드폴더>/plugin/meeting_api/health.php`
+   - `setup_board.php` 실행 시에만 `define('meeting_API_ALLOW_SETUP', true);` 설정
+3. **게시판 자동 생성** — `setup_board.php`에 `X-API-Token` 헤더를 포함한 POST 요청 1회
+4. **`meeting_API_ALLOW_SETUP`을 false로 되돌리거나 setup_board.php 삭제** (보안)
+5. **헬스체크** — `health.php`에 `X-API-Token` 헤더를 포함한 GET 요청
 
 자세한 가이드는 상위 폴더의 [README.md](../README.md) 참고.
 
@@ -37,6 +42,27 @@ gnuboard5/
 | GET | `health.php` | 환경 점검 |
 | POST | `post.php` | 회의 요약 → 게시글 |
 | POST | `comment.php` | 발화 → 댓글 |
-| GET | `setup_board.php?token=...` | 게시판 1회 자동 생성 |
+| POST | `update_post.php` | 게시글 제목/본문 수정 |
+| POST | `list_comments.php` | 게시글 댓글 목록 조회 |
+| POST | `update_comment.php` | 댓글 본문/작성자 수정 |
+| POST | `delete_post.php` | 게시글과 댓글 삭제 |
+| POST | `cleanup_tests.php` | 오래된 연결 테스트 글 정리 |
+| POST | `setup_board.php` | 게시판 1회 자동 생성 |
 
-모든 POST 요청은 헤더 `X-API-Token` 필수.
+모든 API 요청은 헤더 `X-API-Token` 필수.
+`update_*`, `list_comments.php`, `delete_post.php`는 기본적으로 `post.php`가 생성한 marker 있는 게시글만 대상으로 동작합니다.
+기존 marker 없는 글을 임시로 다뤄야 할 때는 `config.local.php`에서 `meeting_API_ALLOW_UNMARKED_WRITES`를 true로 설정한 뒤 작업 후 되돌리세요.
+`setup_board.php`는 `config.local.php`에서 `meeting_API_ALLOW_SETUP`을 true로 켠 경우에만 실행됩니다.
+
+기본 요청 크기 제한은 전체 JSON 3 MiB, 게시글 본문 2 MiB, 댓글 본문 256 KiB입니다.
+운영 환경에서 조정이 필요하면 `config.local.php`에 `meeting_API_MAX_BODY_BYTES`,
+`meeting_API_MAX_POST_CONTENT_BYTES`, `meeting_API_MAX_COMMENT_CONTENT_BYTES`를 정의하세요.
+공개 도메인에 설치하는 경우 `meeting_API_ALLOWED_IPS`에 Python을 실행하는 PC/서버의 IP 또는 CIDR을 지정해 호출 가능 대상을 제한하는 것을 권장합니다.
+
+```bash
+curl -H "X-API-Token: YOUR_TOKEN" \
+  https://YOUR-DOMAIN/<그누보드폴더>/plugin/meeting_api/health.php
+
+curl -X POST -H "X-API-Token: YOUR_TOKEN" \
+  https://YOUR-DOMAIN/<그누보드폴더>/plugin/meeting_api/setup_board.php
+```

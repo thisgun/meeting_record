@@ -17,8 +17,11 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 # 프로젝트 루트
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 MODELS_DIR = ROOT / "data" / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+from config import load_config
 
 
 def download(repo_id: str, local_subdir: str) -> Path:
@@ -37,11 +40,12 @@ def download(repo_id: str, local_subdir: str) -> Path:
 
 
 def main():
+    cfg = load_config()
     print(f"모델 저장 폴더: {MODELS_DIR}")
     print()
 
     # 1) faster-whisper (한국어 STT) — 사용자가 .env에서 모델 선택
-    whisper_size = os.getenv("WHISPER_MODEL", "medium")
+    whisper_size = cfg.whisper_model
     # 환경변수 WHISPER_DOWNLOAD_ALL=1 이면 small/medium/large-v3 모두 사전 다운로드
     sizes = [whisper_size]
     if os.getenv("WHISPER_DOWNLOAD_ALL") == "1":
@@ -49,9 +53,8 @@ def main():
     for size in sizes:
         download(f"Systran/faster-whisper-{size}", f"faster-whisper-{size}")
 
-    # 2) 한국어 alignment 모델 (WhisperX align용)
-    # whisperx 한국어 기본 align 모델: kresnik/wav2vec2-large-xlsr-korean
-    download("kresnik/wav2vec2-large-xlsr-korean", "wav2vec2-korean")
+    # 참고: 이전 WhisperX 정렬용 wav2vec2 모델(kresnik/wav2vec2-large-xlsr-korean)은
+    # 더 이상 받지 않는다. faster-whisper의 내장 단어 타임스탬프(word_timestamps)로 대체됨.
 
     # speechbrain ECAPA-TDNN은 이미 ./data/models/spkrec-ecapa-voxceleb 에 받음 (LocalStrategy.COPY)
     sb_path = MODELS_DIR / "spkrec-ecapa-voxceleb"
@@ -61,7 +64,7 @@ def main():
         print("[speechbrain/spkrec-ecapa-voxceleb] 첫 diarize_local() 호출 시 자동 다운로드")
 
     print()
-    print("✓ 모든 모델 준비 완료.")
+    print("[ok] 모든 모델 준비 완료.")
 
 
 if __name__ == "__main__":

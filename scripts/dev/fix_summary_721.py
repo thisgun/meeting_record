@@ -5,16 +5,15 @@ SQLite의 raw response에서 title과 summary_md를 추출,
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
-import subprocess
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import load_config
 from src import storage
+from src.g5_client import G5ApiError, build_clients_from_env
 
 
 def extract_partial_json(raw: str) -> dict:
@@ -63,37 +62,43 @@ def main(meeting_id: int) -> int:
     print("=== 보정된 summary_md 마지막 300자 ===")
     print(fixed["summary_md"][-300:])
 
-    # SQLite 업데이트
-    import sqlite3
-    with sqlite3.connect(str(cfg.db_path)) as conn:
-        conn.execute(
-            "UPDATE meetings SET title=?, summary_md=? WHERE id=?",
-            (fixed["title"], fixed["summary_md"], meeting_id),
-        )
+    storage.update_meeting_summary(
+        cfg.db_path,
+        meeting_id,
+        title=fixed["title"],
+        summary_md=fixed["summary_md"],
+    )
     print(f"\n✓ SQLite meeting_id={meeting_id} 업데이트 완료")
 
     # 그누보드5도 업데이트
     remote_post_id = meeting["meeting"]["remote_post_id"]
-    if remote_post_id:
-        wr_id = int(remote_post_id)
-        mysql = r"C:\xampp\mysql\bin\mysql.exe"
-        # 임시 파일로 SQL (긴 본문 안전하게)
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False, encoding="utf-8") as f:
-            sql_path = f.name
-            esc_title = fixed["title"].replace("\\", "\\\\").replace("'", "''")
-            esc_content = fixed["summary_md"].replace("\\", "\\\\").replace("'", "''")
-            f.write(f"UPDATE g5_write_meeting SET wr_subject='{esc_title}', wr_content='{esc_content}' WHERE wr_id={wr_id};")
-        result = subprocess.run(
-            [mysql, "-u", "root", "meeting", "--default-character-set=utf8mb4"],
-            stdin=open(sql_path, encoding="utf-8"),
-            capture_output=True, text=True, encoding="utf-8",
-        )
-        Path(sql_path).unlink(missing_ok=True)
-        if result.returncode != 0:
-            print(f"그누보드5 업데이트 실패: {result.stderr}")
+    if remote_post_id or meeting.get("sync_targets"):
+        clients = build_clients_from_env(cfg)
+        if not clients:
+            print("그누보드5 클라이언트 없음")
             return 2
-        print(f"✓ 그누보드5 wr_id={wr_id} 업데이트 완료")
+        failed = False
+        try:
+            for client in clients:
+                target = storage.get_meeting_target(cfg.db_path, meeting_id, client.name)
+                target_wr_id = target.get("remote_post_id") if target else None
+                if not target_wr_id and client.name == "default":
+                    target_wr_id = remote_post_id
+                if not target_wr_id:
+                    print(f"[warn] [{client.name}] 원격 게시글 ID 없음 — 스킵")
+                    continue
+                wr_id = int(target_wr_id)
+                client.update_post(
+                    wr_id,
+                    subject=fixed["title"],
+                    content=fixed["summary_md"],
+                )
+                print(f"✓ [{client.name}] 그누보드5 wr_id={wr_id} 업데이트 완료")
+        except G5ApiError as e:
+            failed = True
+            print(f"그누보드5 업데이트 실패: {e}")
+        if failed:
+            return 2
 
     return 0
 

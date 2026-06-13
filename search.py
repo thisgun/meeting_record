@@ -7,6 +7,7 @@
     python search.py "지게차" --utterances-only     # 발화만
     python search.py "산재" --since 2026-01-01 --until 2026-12-31
     python search.py --rebuild                      # FTS 인덱스 재구축
+    python search.py --recreate-fts --tokenizer trigram  # FTS 테이블을 trigram으로 재생성
 
 FTS5 쿼리 문법:
     "단어 OR 단어"      # OR
@@ -24,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src import storage
 
 
@@ -40,10 +42,15 @@ def cmd_search(args) -> int:
 
     if not args.utterances_only:
         print(f"\n=== 회의 검색 결과 (상위 {args.limit}개) ===\n")
-        meetings = storage.search_meetings(
-            cfg.db_path, args.query,
-            limit=args.limit, since=args.since, until=args.until,
-        )
+        try:
+            meetings = storage.search_meetings(
+                cfg.db_path, args.query,
+                limit=args.limit, since=args.since, until=args.until,
+                advanced=args.advanced,
+            )
+        except Exception as e:
+            print(f"회의 검색 실패: {e}", file=sys.stderr)
+            return 2
         if not meetings:
             print("  (검색 결과 없음)")
         for m in meetings:
@@ -54,11 +61,16 @@ def cmd_search(args) -> int:
 
     if not args.meetings_only:
         print(f"\n=== 발화 검색 결과 (상위 {args.limit}개) ===\n")
-        utts = storage.search_utterances(
-            cfg.db_path, args.query,
-            speaker=args.speaker, meeting_id=args.meeting,
-            limit=args.limit,
-        )
+        try:
+            utts = storage.search_utterances(
+                cfg.db_path, args.query,
+                speaker=args.speaker, meeting_id=args.meeting,
+                limit=args.limit,
+                advanced=args.advanced,
+            )
+        except Exception as e:
+            print(f"발화 검색 실패: {e}", file=sys.stderr)
+            return 2
         if not utts:
             print("  (검색 결과 없음)")
         for u in utts:
@@ -79,13 +91,26 @@ def cmd_rebuild(args) -> int:
     return 0
 
 
+def cmd_recreate_fts(args) -> int:
+    cfg = load_config()
+    print(f"FTS 테이블 재생성 중... tokenizer={args.tokenizer}")
+    try:
+        actual = storage.recreate_fts(cfg.db_path, tokenizer=args.tokenizer)
+    except Exception as e:
+        print(f"FTS 테이블 재생성 실패: {e}", file=sys.stderr)
+        return 2
+    print(f"✓ 완료: tokenizer={actual}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="회의록 검색 CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("query", nargs="?", help="검색어 (FTS5 MATCH 문법)")
+    parser.add_argument("query", nargs="?", help="검색어")
     parser.add_argument("--limit", type=int, default=10, help="결과 개수 (기본 10)")
     parser.add_argument("--speaker", help="발화 화자 필터 (예: 사용자3, 회의_사용자3)")
     parser.add_argument("--meeting", type=int, help="특정 meeting_id만 검색")
@@ -94,11 +119,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--meetings-only", action="store_true", help="회의 요약만 검색")
     parser.add_argument("--utterances-only", action="store_true", help="발화만 검색")
     parser.add_argument("--rebuild", action="store_true", help="FTS 인덱스 재구축")
+    parser.add_argument("--recreate-fts", action="store_true", help="FTS 테이블/트리거를 삭제 후 재생성")
+    parser.add_argument("--tokenizer", choices=["auto", "trigram", "unicode61"], default="auto", help="--recreate-fts에서 사용할 tokenizer")
+    parser.add_argument("--advanced", action="store_true", help="FTS5 MATCH 문법을 그대로 사용")
 
     args = parser.parse_args(argv)
 
     if args.rebuild:
         return cmd_rebuild(args)
+    if args.recreate_fts:
+        return cmd_recreate_fts(args)
     if not args.query:
         parser.print_help()
         return 1

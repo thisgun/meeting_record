@@ -8,7 +8,12 @@
 """
 from __future__ import annotations
 
+import hmac
+import json
+import os
+import re
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -16,8 +21,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import streamlit as st
 
+from app_auth import require_app_auth
 from config import load_config
 from src import comparator, dictionary, exporter, stats, storage
+from src.g5_client import (
+    G5ApiError,
+    build_clients_from_env,
+    format_utterance_comment,
+    legacy_default_target_name,
+)
 
 
 st.set_page_config(page_title="회의록 관리", page_icon="📝", layout="wide")
@@ -37,6 +49,244 @@ def _ts(sec: float) -> str:
 
 def _fmt_dur(sec: float) -> str:
     return stats.format_duration(sec)
+
+
+def _safe_filename_part(value: str, *, max_len: int = 40) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._")
+    return (cleaned or "meeting")[:max_len]
+
+
+def _g5_board_url(api_base: str, bo_table: str, wr_id: str | int) -> str:
+    base = api_base.rstrip("/")
+    for suffix in ("/plugin/meeting_api", "/g5_meeting_api"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return f"{base}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}"
+
+
+def _g5_clients(cfg):
+    clients = build_clients_from_env(cfg)
+    target_name = legacy_default_target_name(clients)
+    if target_name:
+        storage.adopt_default_sync_target(cfg.db_path, target_name)
+    return clients
+
+
+def _meeting_target_post_id(cfg, meeting_id: int, target_name: str, fallback: str | None = None) -> str | None:
+    target = storage.get_meeting_target(cfg.db_path, meeting_id, target_name)
+    post_id = target.get("remote_post_id") if target else None
+    if not post_id and target_name == "default":
+        post_id = fallback
+    return str(post_id) if post_id else None
+
+
+def _comment_target_id(cfg, client, meeting_id: int, utt: dict) -> str | None:
+    target = storage.get_utterance_target(cfg.db_path, utt["id"], client.name)
+    comment_id = target.get("remote_comment_id") if target else None
+    if comment_id:
+        return str(comment_id)
+
+    data = storage.get_meeting(cfg.db_path, meeting_id)
+    if not data:
+        return None
+    post_id = _meeting_target_post_id(
+        cfg,
+        meeting_id,
+        client.name,
+        data["meeting"].get("remote_post_id"),
+    )
+    if not post_id:
+        return None
+    comments = client.list_comments(int(post_id))
+    if len(comments) != len(data.get("utterances", [])):
+        return None
+    idx = int(utt.get("seq", -1))
+    if 0 <= idx < len(comments) and comments[idx].get("comment_id"):
+        comment_id = str(comments[idx]["comment_id"])
+        storage.mark_utterance_synced(
+            cfg.db_path,
+            utt["id"],
+            comment_id,
+            target_name=client.name,
+            primary=False,
+        )
+        return comment_id
+    return None
+
+
+def _sync_summary_to_g5(cfg, meeting_id: int, title: str, summary_md: str) -> list[str]:
+    data = storage.get_meeting(cfg.db_path, meeting_id)
+    if not data:
+        return ["로컬 회의 정보를 찾지 못했습니다."]
+    clients = _g5_clients(cfg)
+    if not clients:
+        return ["G5 클라이언트 설정이 없습니다."]
+
+    messages: list[str] = []
+    for client in clients:
+        post_id = _meeting_target_post_id(
+            cfg,
+            meeting_id,
+            client.name,
+            data["meeting"].get("remote_post_id"),
+        )
+        if not post_id:
+            messages.append(f"[{client.name}] 게시글 갱신 실패: 원격 게시글 ID 없음")
+            storage.mark_meeting_failed(
+                cfg.db_path,
+                meeting_id,
+                "원격 게시글 ID 없음",
+                target_name=client.name,
+            )
+            continue
+        try:
+            client.update_post(int(post_id), subject=title, content=summary_md)
+            storage.mark_meeting_post_updated(
+                cfg.db_path,
+                meeting_id,
+                str(post_id),
+                target_name=client.name,
+                primary=client.name == "default",
+            )
+            messages.append(f"[{client.name}] 게시글 갱신 완료")
+        except G5ApiError as e:
+            storage.mark_meeting_failed(
+                cfg.db_path,
+                meeting_id,
+                f"게시글 갱신 실패: {e}",
+                target_name=client.name,
+            )
+            messages.append(f"[{client.name}] 게시글 갱신 실패: {e}")
+    return messages
+
+
+def _sync_utterance_to_g5(cfg, meeting_id: int, utt: dict) -> list[str]:
+    clients = _g5_clients(cfg)
+    if not clients:
+        return ["G5 클라이언트 설정이 없습니다."]
+
+    messages: list[str] = []
+    payload = {
+        "speaker": utt["speaker"],
+        "start": utt["start_sec"],
+        "end": utt["end_sec"],
+        "text": utt["text"],
+    }
+    for client in clients:
+        try:
+            comment_id = _comment_target_id(cfg, client, meeting_id, utt)
+            if not comment_id:
+                messages.append(f"[{client.name}] 댓글 갱신 실패: 댓글 ID 없음")
+                storage.mark_utterance_failed(
+                    cfg.db_path,
+                    utt["id"],
+                    "댓글 ID 없음",
+                    target_name=client.name,
+                )
+                post_id = _meeting_target_post_id(cfg, meeting_id, client.name)
+                if post_id:
+                    storage.mark_meeting_partial(
+                        cfg.db_path,
+                        meeting_id,
+                        str(post_id),
+                        "댓글 ID 없음",
+                        target_name=client.name,
+                        primary=False,
+                    )
+                else:
+                    storage.mark_meeting_failed(
+                        cfg.db_path,
+                        meeting_id,
+                        "댓글 ID 없음",
+                        target_name=client.name,
+                    )
+                continue
+            client.update_comment(
+                int(comment_id),
+                content=format_utterance_comment(payload),
+                author_name=f"회의_{utt['speaker']}",
+            )
+            storage.mark_utterance_synced(
+                cfg.db_path,
+                utt["id"],
+                str(comment_id),
+                target_name=client.name,
+                primary=False,
+            )
+            messages.append(f"[{client.name}] 댓글 갱신 완료")
+        except G5ApiError as e:
+            storage.mark_utterance_failed(
+                cfg.db_path,
+                utt["id"],
+                f"댓글 갱신 실패: {e}",
+                target_name=client.name,
+            )
+            post_id = _meeting_target_post_id(cfg, meeting_id, client.name)
+            if post_id:
+                storage.mark_meeting_partial(
+                    cfg.db_path,
+                    meeting_id,
+                    str(post_id),
+                    f"댓글 갱신 실패: {e}",
+                    target_name=client.name,
+                    primary=False,
+                )
+            messages.append(f"[{client.name}] 댓글 갱신 실패: {e}")
+    return messages
+
+
+def _delete_remote_meeting(cfg, meeting_id: int, meeting: dict) -> list[str]:
+    clients = _g5_clients(cfg)
+    if not clients:
+        return ["G5 클라이언트 설정이 없어 원격 삭제를 건너뜁니다."]
+
+    messages: list[str] = []
+    for client in clients:
+        post_id = _meeting_target_post_id(
+            cfg,
+            meeting_id,
+            client.name,
+            meeting.get("remote_post_id"),
+        )
+        if not post_id:
+            messages.append(f"[{client.name}] 원격 게시글 ID 없음")
+            continue
+        try:
+            client.delete_post(int(post_id))
+            messages.append(f"[{client.name}] 원격 게시글 삭제 완료")
+        except G5ApiError as e:
+            messages.append(f"[{client.name}] 원격 게시글 삭제 실패: {e}")
+    return messages
+
+
+def _render_remote_messages(messages: list[str]) -> bool:
+    failed = any("실패" in m for m in messages)
+    for msg in messages:
+        if "실패" in msg:
+            st.error(msg)
+        elif "없음" in msg:
+            st.warning(msg)
+        else:
+            st.success(msg)
+    return not failed
+
+
+def _show_remote_messages(messages: list[str], *, persist: bool = False) -> bool:
+    if persist:
+        st.session_state["_remote_messages"] = list(messages)
+    return _render_remote_messages(messages)
+
+
+def _drain_remote_messages() -> None:
+    messages = st.session_state.pop("_remote_messages", [])
+    if messages:
+        _render_remote_messages(messages)
+
+
+require_app_auth()
+_drain_remote_messages()
 
 
 # ── 사이드바: 페이지 선택 ─────────────────────────────────
@@ -88,7 +338,8 @@ def render_meeting_detail(meeting_id: int):
     col1.metric("회의 길이", _fmt_dur(m["duration_sec"]))
     col2.metric("발화 수", len(utts))
     col3.metric("화자 수", m["speaker_count"])
-    col4.metric("그누보드5", f"wr_id={m['remote_post_id']}" if m["remote_post_id"] else "미등록")
+    target_count = len(data.get("sync_targets") or [])
+    col4.metric("그누보드5", f"{target_count}개 타겟" if target_count else ("wr_id=" + str(m["remote_post_id"]) if m["remote_post_id"] else "미등록"))
 
     # 탭
     tab_summary, tab_utts, tab_stats, tab_edit, tab_export = st.tabs(
@@ -126,7 +377,7 @@ def render_meeting_detail(meeting_id: int):
                 "평균 발언": _fmt_dur(s["avg_sec"]),
                 "비율(%)": s["ratio_pct"],
             } for s in sp_stats],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         # 막대 그래프
@@ -142,12 +393,12 @@ def render_meeting_detail(meeting_id: int):
                 "발화": t["count"],
                 "주도 화자": f"{t['top_speaker']} ({t['top_speaker_count']}건)",
             } for t in tl],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
     with tab_edit:
-        st.warning("⚠️ 변경 사항은 즉시 DB에 반영됩니다. 그누보드5 동기화는 별도 버튼.")
+        st.warning("⚠️ 변경 사항은 즉시 DB에 반영되고, 연결된 그누보드5 타겟도 함께 갱신됩니다.")
 
         st.subheader("화자 라벨 일괄 변경")
         speakers = sorted({u["speaker"] for u in utts})
@@ -156,8 +407,13 @@ def render_meeting_detail(meeting_id: int):
         new = col2.text_input("새 라벨", value=old, key=f"new_sp_{meeting_id}")
         if col3.button("변경", key=f"btn_sp_{meeting_id}"):
             if new and new != old:
+                changed_utts = [dict(u, speaker=new) for u in utts if u["speaker"] == old]
                 n = storage.update_speaker_label(cfg.db_path, meeting_id, old, new)
-                st.success(f"{n}건 변경됨 → 새로고침")
+                st.success(f"{n}건 변경됨")
+                remote_messages: list[str] = []
+                for changed in changed_utts:
+                    remote_messages.extend(_sync_utterance_to_g5(cfg, meeting_id, changed))
+                _show_remote_messages(remote_messages, persist=True)
                 st.rerun()
 
         st.divider()
@@ -172,8 +428,14 @@ def render_meeting_detail(meeting_id: int):
                     new_text = st.text_area("내용", value=u["text"], key=f"text_{u['id']}", height=80)
                     submitted = st.form_submit_button("저장")
                     if submitted and new_text != u["text"]:
+                        changed = dict(u)
+                        changed["text"] = new_text
                         storage.update_utterance_text(cfg.db_path, u["id"], new_text)
-                        st.success("저장됨 → 새로고침")
+                        st.success("저장됨")
+                        _show_remote_messages(
+                            _sync_utterance_to_g5(cfg, meeting_id, changed),
+                            persist=True,
+                        )
                         st.rerun()
 
         st.divider()
@@ -184,6 +446,10 @@ def render_meeting_detail(meeting_id: int):
             if st.form_submit_button("요약 저장"):
                 storage.update_meeting_summary(cfg.db_path, meeting_id, title=new_title, summary_md=new_md)
                 st.success("저장됨")
+                _show_remote_messages(
+                    _sync_summary_to_g5(cfg, meeting_id, new_title, new_md),
+                    persist=True,
+                )
                 st.rerun()
 
         st.divider()
@@ -193,33 +459,52 @@ def render_meeting_detail(meeting_id: int):
             confirm = st.text_input(f"확인을 위해 #{meeting_id} 을 입력하세요")
             if st.button("정말 삭제", type="primary"):
                 if confirm == f"#{meeting_id}":
-                    storage.delete_meeting(cfg.db_path, meeting_id)
-                    st.success("삭제됨")
-                    st.rerun()
+                    remote_ok = _show_remote_messages(
+                        _delete_remote_meeting(cfg, meeting_id, m),
+                        persist=True,
+                    )
+                    if remote_ok:
+                        storage.delete_meeting(cfg.db_path, meeting_id)
+                        st.success("삭제됨")
+                        st.rerun()
+                    else:
+                        st.error("원격 삭제 실패가 있어 로컬 삭제를 중단했습니다.")
                 else:
                     st.error("입력값 불일치")
 
     with tab_export:
         col1, col2 = st.columns(2)
         include_transcript = col1.checkbox("발화 전문 포함", value=True)
-        if col2.button("📥 .docx 다운로드", use_container_width=True):
-            out_path = Path(f"./data/exports/{meeting_id:03d}_{m['title'][:30]}.docx")
+        if col2.button("📥 .docx 다운로드", width="stretch"):
+            out_path = Path("./data/exports") / f"{meeting_id:03d}_{_safe_filename_part(m['title'])}.docx"
             exporter.to_docx(m, utts, out_path, include_transcript=include_transcript)
             with open(out_path, "rb") as f:
                 st.download_button("다운로드 받기", f.read(), file_name=out_path.name)
 
-        if col1.button("🌐 .html 다운로드", use_container_width=True):
-            out_path = Path(f"./data/exports/{meeting_id:03d}_{m['title'][:30]}.html")
+        if col1.button("🌐 .html 다운로드", width="stretch"):
+            out_path = Path("./data/exports") / f"{meeting_id:03d}_{_safe_filename_part(m['title'])}.html"
             exporter.to_html(m, utts, out_path, include_transcript=include_transcript)
             with open(out_path, "rb") as f:
                 st.download_button("HTML 다운로드", f.read(), file_name=out_path.name)
 
         st.divider()
         st.caption("그누보드5 게시판 링크")
-        if m["remote_post_id"]:
-            g5_url = f"{cfg.g5_api_base.replace('/g5_meeting_api','')}/gnuboard5/bbs/board.php?bo_table={cfg.g5_bo_table}&wr_id={m['remote_post_id']}"
+        clients = {c.name: c for c in _g5_clients(cfg)}
+        shown = False
+        for target in data.get("sync_targets") or []:
+            post_id = target.get("remote_post_id")
+            client = clients.get(target.get("target_name"))
+            if post_id and client:
+                shown = True
+                st.link_button(
+                    f"🔗 {client.name}에서 보기",
+                    _g5_board_url(client.api_base, cfg.g5_bo_table, post_id),
+                )
+        if not shown and m["remote_post_id"] and cfg.g5_api_base:
+            g5_url = _g5_board_url(cfg.g5_api_base, cfg.g5_bo_table, m["remote_post_id"])
             st.link_button("🔗 그누보드5에서 보기", g5_url)
-        else:
+            shown = True
+        if not shown:
             st.info("그누보드5에 미등록 — `python main.py --resync` 실행")
 
 
@@ -328,7 +613,7 @@ def render_compare():
                 if kw["shared"]:
                     st.dataframe(
                         [{"단어": w, "A": na, "B": nb, "합계": na+nb} for w, na, nb in kw["shared"][:15]],
-                        use_container_width=True, hide_index=True,
+                        width="stretch", hide_index=True,
                     )
                 else:
                     st.caption("공통 키워드 없음")
@@ -337,12 +622,12 @@ def render_compare():
                 col1.subheader("A에만 자주")
                 col1.dataframe(
                     [{"단어": w, "횟수": n} for w, n in kw["only_a"][:15]],
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 ) if kw["only_a"] else col1.caption("없음")
                 col2.subheader("B에만 자주")
                 col2.dataframe(
                     [{"단어": w, "횟수": n} for w, n in kw["only_b"][:15]],
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 ) if kw["only_b"] else col2.caption("없음")
 
     with tab_timeline:
@@ -360,7 +645,7 @@ def render_compare():
                     "평균": _fmt_dur(r["avg_sec"]),
                     "총 발화": r["utterance_count"],
                 } for r in rows],
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
             st.subheader("월별 회의 수")
             st.bar_chart({r["month"]: r["count"] for r in rows})
@@ -377,7 +662,7 @@ def render_compare():
             if rows:
                 st.dataframe(
                     [{"월": r["month"], "회의 수": r["meeting_count"], "등장 횟수": r["occurrence_count"]} for r in rows],
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
                 st.bar_chart({r["month"]: r["occurrence_count"] for r in rows})
             else:
@@ -402,7 +687,7 @@ def render_compare():
                         "월": r["month"], "참여 회의": r["meeting_count"],
                         "발화 수": r["utterance_count"], "발언 시간": _fmt_dur(r["total_sec"]),
                     } for r in rows],
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
                 st.bar_chart({r["month"]: r["utterance_count"] for r in rows})
 
@@ -419,7 +704,7 @@ def render_compare():
                 col1, col2 = st.columns([1, 1])
                 col1.dataframe(
                     [{"단어": w, "횟수": n} for w, n in kws],
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
                 col2.bar_chart({w: n for w, n in kws[:20]}, horizontal=True)
 

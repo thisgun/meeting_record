@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src import storage, exporter
 
 
@@ -64,6 +65,7 @@ def export_one(meeting_id: int, fmt: str, out: str | None, include_transcript: b
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description="회의록 export", formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     parser.add_argument("meeting_id", nargs="?", type=int, help="export할 meeting_id")
     parser.add_argument("--all", action="store_true", help="모든 회의 일괄 export")

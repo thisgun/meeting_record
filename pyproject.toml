@@ -1,6 +1,6 @@
 [project]
-name = "metting-record"
-version = "0.1.0"
+name = "meeting-record"
+version = "0.6.0"
 description = "한국어 회의 음성을 자동으로 화자별 분리·요약하여 SQLite와 그누보드5 게시판에 등록"
 readme = "README.md"
 license = { text = "LGPL-2.1-or-later" }
@@ -18,15 +18,15 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
     "Topic :: Text Processing :: Linguistic",
     "Natural Language :: Korean",
 ]
 
 dependencies = [
-    "whisperx>=3.1.0",
-    "faster-whisper>=1.0.0",
-    "pyannote.audio>=3.1.0",
+    "faster-whisper>=1.1.0",
+    "pyannote.audio>=3.1.0; python_version < '3.13'",
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
     "speechbrain>=1.0.0",
@@ -36,13 +36,27 @@ dependencies = [
     "requests>=2.31.0",
     "python-dotenv>=1.0.0",
     "pydub>=0.25.1",
+    "psutil>=5.9.0",
     "streamlit>=1.50.0",
     "python-docx>=1.0.0",
     "watchdog>=4.0.0",
+    "huggingface-hub>=0.23.0",
 ]
+
+[project.scripts]
+meeting-record = "meeting_record.cli:record"
+meeting-doctor = "meeting_record.cli:doctor"
+meeting-export = "meeting_record.cli:export"
+meeting-search = "meeting_record.cli:search"
+meeting-stats = "meeting_record.cli:stats"
+meeting-compare = "meeting_record.cli:compare"
+meeting-dict = "meeting_record.cli:dictionary"
+meeting-enroll = "meeting_record.cli:enroll"
+meeting-watch = "meeting_record.cli:watch"
 
 [project.optional-dependencies]
 korean-nlp = ["kiwipiepy>=0.20.0"]
+dev = ["pytest>=8.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/thisgun/meeting_record"
@@ -54,6 +68,21 @@ Changelog = "https://github.com/thisgun/meeting_record/blob/main/CHANGELOG.md"
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+py-modules = [
+    "app",
+    "compare",
+    "config",
+    "dict",
+    "doctor",
+    "enroll",
+    "export",
+    "main",
+    "search",
+    "stats",
+    "watcher",
+]
+
 [tool.setuptools.packages.find]
-include = ["src*"]
+include = ["src*", "meeting_record*"]
 exclude = ["tests*", "data*", "scripts*"]

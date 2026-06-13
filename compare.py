@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import load_config
+from meeting_record.console import configure_utf8_stdio
 from src import comparator, stats, storage
 
 
@@ -123,6 +124,7 @@ def cmd_top_keywords(args, cfg) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     p = argparse.ArgumentParser(description="회의 비교 분석", formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     p.add_argument("id_a", nargs="?", type=int, help="비교 대상 A의 meeting_id")
     p.add_argument("id_b", nargs="?", type=int, help="비교 대상 B의 meeting_id")

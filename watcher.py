@@ -6,11 +6,13 @@
 사용:
     python watcher.py                  # WATCH_DIR 감시 시작
     python watcher.py --scan-now        # 폴더 한 번 스캔만 (기존 파일 처리 후 종료)
+    python watcher.py --no-upload       # 로컬 DB 저장만
 
 설정 (.env):
     WATCH_DIR=./data/watch              # 감시할 폴더
     WATCH_SPEAKERS=                     # 화자 수 (빈 값이면 자동 추정)
     WATCH_STABILITY_SEC=5               # 파일 크기가 N초간 변하지 않으면 "복사 완료"로 판단
+    WATCH_NO_UPLOAD=0                   # 1이면 main.py --no-upload로 실행
     WATCH_PROCESSED_DIR=                # 처리 끝나면 옮길 폴더 (기본: ./data/uploads)
     WATCH_LOG=./data/watch.log          # 처리 이력 로그
 """
@@ -28,7 +30,10 @@ from dotenv import load_dotenv
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from meeting_record.console import configure_utf8_stdio
 
+
+configure_utf8_stdio()
 load_dotenv(override=True)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -44,8 +49,19 @@ WATCH_LOG.parent.mkdir(parents=True, exist_ok=True)
 
 WATCH_SPEAKERS = os.getenv("WATCH_SPEAKERS", "").strip()
 WATCH_STABILITY_SEC = float(os.getenv("WATCH_STABILITY_SEC", "5"))
+WATCH_NO_UPLOAD = os.getenv("WATCH_NO_UPLOAD", "").lower().strip() in ("1", "true", "yes", "on")
 
-SUPPORTED_EXT = {".mp3", ".m4a", ".wav", ".amr", ".aac", ".ogg", ".flac", ".wma"}
+SUPPORTED_EXT = {
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".amr",
+    ".aac",
+    ".ogg",
+    ".flac",
+    ".wma",
+    ".mp4",
+}
 
 
 def log(msg: str) -> None:
@@ -74,7 +90,7 @@ def is_stable(path: Path, stability_sec: float = WATCH_STABILITY_SEC) -> bool:
     return size1 == size2 and size1 > 0
 
 
-def process_file(audio_path: Path) -> int:
+def process_file(audio_path: Path, *, no_upload: bool = WATCH_NO_UPLOAD) -> int:
     """main.py를 실행해서 회의록 처리."""
     log(f"▶ 처리 시작: {audio_path.name} ({audio_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
@@ -84,6 +100,8 @@ def process_file(audio_path: Path) -> int:
     ]
     if WATCH_SPEAKERS:
         cmd += ["--speakers", WATCH_SPEAKERS]
+    if no_upload:
+        cmd.append("--no-upload")
 
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
 
@@ -123,9 +141,10 @@ def process_file(audio_path: Path) -> int:
 
 
 class AudioFileHandler(FileSystemEventHandler):
-    def __init__(self):
+    def __init__(self, *, no_upload: bool = WATCH_NO_UPLOAD):
         super().__init__()
         self._processing: set[str] = set()
+        self.no_upload = no_upload
 
     def on_created(self, event):
         if event.is_directory:
@@ -150,7 +169,7 @@ class AudioFileHandler(FileSystemEventHandler):
             if not is_stable(path):
                 log(f"  파일이 아직 변경 중이거나 사라짐. 스킵.")
                 return
-            process_file(path)
+            process_file(path, no_upload=self.no_upload)
         finally:
             self._processing.discard(key)
 
@@ -166,10 +185,14 @@ def scan_existing(handler: AudioFileHandler) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description="회의 음성 자동 처리 감시 데몬")
     parser.add_argument("--scan-now", action="store_true",
                         help="기존 파일만 처리하고 종료")
+    parser.add_argument("--no-upload", action="store_true",
+                        help="main.py --no-upload로 실행하여 로컬 DB에만 저장")
     args = parser.parse_args(argv)
+    no_upload = args.no_upload or WATCH_NO_UPLOAD
 
     log("=" * 60)
     log(f"watcher 시작")
@@ -177,9 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     log(f"감시 확장자: {', '.join(sorted(SUPPORTED_EXT))}")
     log(f"WATCH_SPEAKERS: {WATCH_SPEAKERS or '자동 추정'}")
     log(f"WATCH_STABILITY_SEC: {WATCH_STABILITY_SEC}")
+    log(f"업로드: {'생략 (--no-upload)' if no_upload else '사용'}")
     log("=" * 60)
 
-    handler = AudioFileHandler()
+    handler = AudioFileHandler(no_upload=no_upload)
     scan_existing(handler)
 
     if args.scan_now:
