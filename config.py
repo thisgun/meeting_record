@@ -28,6 +28,11 @@ class Config:
     db_path: Path
     work_dir: Path
     upload_dir: Path
+    # RAG 챗봇 (ask.py / qa_watcher.py)
+    embed_model: str                  # Ollama 임베딩 모델 (예: bge-m3)
+    rag_top_k: int                    # 검색할 청크 수
+    qa_bo_table: str                  # 질문 게시판 bo_table
+    qa_poll_sec: float                # 질문 게시판 폴링 주기(초)
 
 
 def _path(env_key: str, default: str) -> Path:
@@ -122,4 +127,8 @@ def load_config() -> Config:
         db_path=_path("DB_PATH", "./data/meetings.db"),
         work_dir=_path("WORK_DIR", "./data/work"),
         upload_dir=_path("UPLOAD_DIR", "./data/uploads"),
+        embed_model=os.getenv("EMBED_MODEL", "bge-m3"),
+        rag_top_k=int(os.getenv("RAG_TOP_K", "6")),
+        qa_bo_table=os.getenv("QA_BO_TABLE", "ask"),
+        qa_poll_sec=float(os.getenv("QA_POLL_SEC", "20")),
     )
