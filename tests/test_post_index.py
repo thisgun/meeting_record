@@ -82,6 +82,53 @@ def test_index_paginates(tmp_path: Path, monkeypatch) -> None:
     assert n == 5
 
 
+def test_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> None:
+    calls: list[int] = []
+
+    def counting_embed(texts, **kw):
+        calls.append(len(texts))
+        return _fake_embed(texts, **kw)
+
+    monkeypatch.setattr(post_index, "embed_texts", counting_embed)
+    db = tmp_path / "posts.db"
+    posts = [{"wr_id": 1, "subject": "반품", "content": "내용", "name": "a", "datetime": "d"}]
+    post_index.index_board(FakeClient(posts), "free", db_path=db, verbose=False)
+    assert sum(calls) > 0
+    calls.clear()
+    # 동일 데이터 재인덱싱 → 재임베딩 호출 없음 (content_hash 동일)
+    post_index.index_board(FakeClient(posts), "free", db_path=db, verbose=False)
+    assert sum(calls) == 0
+
+
+def test_incremental_reembeds_changed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(post_index, "embed_texts", _fake_embed)
+    db = tmp_path / "posts.db"
+    post_index.index_board(
+        FakeClient([{"wr_id": 1, "subject": "반품", "content": "원본 내용", "name": "a", "datetime": "d"}]),
+        "free", db_path=db, verbose=False,
+    )
+    post_index.index_board(
+        FakeClient([{"wr_id": 1, "subject": "반품", "content": "수정된 내용입니다", "name": "a", "datetime": "d"}]),
+        "free", db_path=db, verbose=False,
+    )
+    hits = post_index.search_posts(db, "반품", top_k=5)
+    assert hits and "수정된" in hits[0]["snippet"]
+
+
+def test_incremental_removes_deleted(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(post_index, "embed_texts", _fake_embed)
+    db = tmp_path / "posts.db"
+    both = [
+        {"wr_id": 1, "subject": "반품 정책", "content": "x", "name": "a", "datetime": "d"},
+        {"wr_id": 2, "subject": "배송 안내", "content": "y", "name": "a", "datetime": "d"},
+    ]
+    post_index.index_board(FakeClient(both), "free", db_path=db, verbose=False)
+    # 2번 글 삭제 후 재인덱싱 → 인덱스에서 제거
+    post_index.index_board(FakeClient([both[0]]), "free", db_path=db, verbose=False)
+    hits = post_index.search_posts(db, "배송", top_k=10)
+    assert all(h["wr_id"] != 2 for h in hits)
+
+
 def test_index_empty_board_clears(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(post_index, "embed_texts", _fake_embed)
     db = tmp_path / "posts.db"

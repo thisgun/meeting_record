@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="그누보드5 게시판 시맨틱 검색 인덱서")
     parser.add_argument("boards", nargs="*", help="인덱싱할 bo_table (생략 시 SEMANTIC_BOARDS)")
     parser.add_argument("--search", metavar="QUERY", help="(디버그) 인덱스에서 검색 테스트")
+    parser.add_argument("--rebuild", action="store_true", help="증분 무시하고 전체 재임베딩")
     parser.add_argument("--top-k", type=int, default=10)
     args = parser.parse_args(argv)
 
@@ -49,10 +50,11 @@ def main(argv: list[str] | None = None) -> int:
     client = G5MeetingApiClient(
         api_base=cfg.g5_api_base, api_token=cfg.g5_api_token, name="semantic",
     )
-    print(f"인덱싱 대상: {', '.join(boards)}  →  {cfg.semantic_db_path}")
+    mode = " (전체 재구축)" if args.rebuild else " (증분)"
+    print(f"인덱싱 대상: {', '.join(boards)}{mode}  →  {cfg.semantic_db_path}")
     result = index_boards(
         client, boards, db_path=cfg.semantic_db_path,
-        embed_model=cfg.embed_model, host=cfg.ollama_host,
+        embed_model=cfg.embed_model, host=cfg.ollama_host, force=args.rebuild,
     )
     total = sum(n for n in result.values() if n > 0)
     print(f"완료: 글 {total}개 인덱싱 ({cfg.semantic_db_path})")

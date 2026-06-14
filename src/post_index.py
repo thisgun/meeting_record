@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 from datetime import datetime, timezone
@@ -33,7 +34,8 @@ CREATE TABLE IF NOT EXISTS post_chunks (
     embedding BLOB NOT NULL,
     dim INTEGER NOT NULL,
     model TEXT NOT NULL,
-    indexed_at TEXT NOT NULL
+    indexed_at TEXT NOT NULL,
+    content_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_post_chunks_board ON post_chunks(bo_table);
 CREATE INDEX IF NOT EXISTS idx_post_chunks_model ON post_chunks(model);
@@ -46,6 +48,15 @@ SNIPPET_CHARS = 200
 def init_posts_schema(db_path) -> None:
     with connect(db_path) as conn:
         conn.executescript(POST_SCHEMA)
+        # 기존 테이블 마이그레이션: content_hash 컬럼이 없으면 추가
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(post_chunks)")}
+        if "content_hash" not in cols:
+            conn.execute("ALTER TABLE post_chunks ADD COLUMN content_hash TEXT")
+
+
+def _post_hash(subject: str, body: str) -> str:
+    """글 변경 감지용 해시 (제목+본문)."""
+    return hashlib.sha256(f"{subject}\x00{body}".encode("utf-8")).hexdigest()[:16]
 
 
 def strip_html(text: str) -> str:
@@ -86,60 +97,86 @@ def index_board(
     embed_model: str = "bge-m3",
     host: str = "http://127.0.0.1:11434",
     page_size: int = 100,
+    force: bool = False,
     verbose: bool = True,
 ) -> int:
-    """게시판 1개를 전부 수집·임베딩해 posts.db에 재구축. 인덱싱된 글 수 반환."""
+    """게시판 1개를 증분 인덱싱해 posts.db에 반영. 현재 글 수 반환.
+
+    content_hash로 변경/신규 글만 재임베딩하고, 삭제된 글은 인덱스에서 제거한다.
+    force=True면 전체를 다시 임베딩한다.
+    """
     init_posts_schema(db_path)
 
-    rows: list[tuple] = []  # (wr_id, seq, subject, name, datetime, snippet, text)
+    # 1) 게시판 글 전체 수집 (메타 + 변경 감지 해시)
+    posts: list[dict] = []
     offset = 0
     while True:
         data = client.list_posts(bo_table, offset=offset, limit=page_size)
-        posts = data.get("posts", [])
-        if not posts:
+        page = data.get("posts", [])
+        if not page:
             break
-        for p in posts:
+        for p in page:
             subject = (p.get("subject") or "").strip()
             body = strip_html(p.get("content") or "")
-            snippet = body[:SNIPPET_CHARS].strip() or subject
-            for seq, ctext in enumerate(chunk_post(subject, body)):
-                rows.append((
-                    int(p["wr_id"]), seq, subject, p.get("name"),
-                    p.get("datetime"), snippet, ctext,
-                ))
-        offset += len(posts)
+            posts.append({
+                "wr_id": int(p["wr_id"]), "subject": subject, "body": body,
+                "name": p.get("name"), "datetime": p.get("datetime"),
+                "snippet": body[:SNIPPET_CHARS].strip() or subject,
+                "hash": _post_hash(subject, body),
+            })
+        offset += len(page)
         if offset >= int(data.get("total", 0)):
             break
 
-    if not rows:
-        with connect(db_path) as conn:
-            conn.execute("DELETE FROM post_chunks WHERE bo_table = ?", (bo_table,))
-        if verbose:
-            print(f"  [post-index] {bo_table}: 글 없음 (인덱스 비움)")
-        return 0
+    current_ids = {p["wr_id"] for p in posts}
 
-    arr = embed_texts([r[6] for r in rows], model=embed_model, host=host)
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    dim = int(arr.shape[1])
-
+    # 2) 기존 인덱스의 글별 해시
     with connect(db_path) as conn:
-        conn.execute("DELETE FROM post_chunks WHERE bo_table = ?", (bo_table,))
-        conn.executemany(
-            """INSERT INTO post_chunks
-                 (bo_table, wr_id, seq, subject, name, datetime, snippet, text,
-                  embedding, dim, model, indexed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                (bo_table, wr_id, seq, subject, name, dt, snippet, text,
-                 arr[i].tobytes(), dim, embed_model, now)
-                for i, (wr_id, seq, subject, name, dt, snippet, text) in enumerate(rows)
-            ],
-        )
+        existing = {
+            int(wr_id): h for wr_id, h in conn.execute(
+                "SELECT DISTINCT wr_id, content_hash FROM post_chunks WHERE bo_table = ? AND model = ?",
+                (bo_table, embed_model),
+            )
+        }
 
-    n_posts = len({r[0] for r in rows})
+    deleted = set(existing) - current_ids
+    changed = [p for p in posts if force or existing.get(p["wr_id"]) != p["hash"]]
+
+    # 3) 변경/신규 글의 청크 임베딩
+    chunk_rows: list[tuple] = []  # (wr_id, seq, subject, name, dt, snippet, text, hash)
+    for p in changed:
+        for seq, ctext in enumerate(chunk_post(p["subject"], p["body"])):
+            chunk_rows.append((
+                p["wr_id"], seq, p["subject"], p["name"], p["datetime"],
+                p["snippet"], ctext, p["hash"],
+            ))
+    arr = embed_texts([r[6] for r in chunk_rows], model=embed_model, host=host) if chunk_rows else None
+
+    # 4) DB 반영: 삭제 글 제거 + 변경 글 청크 교체
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect(db_path) as conn:
+        for wid in deleted:
+            conn.execute("DELETE FROM post_chunks WHERE bo_table = ? AND wr_id = ?", (bo_table, wid))
+        for wid in {p["wr_id"] for p in changed}:
+            conn.execute("DELETE FROM post_chunks WHERE bo_table = ? AND wr_id = ?", (bo_table, wid))
+        if chunk_rows:
+            dim = int(arr.shape[1])
+            conn.executemany(
+                """INSERT INTO post_chunks
+                     (bo_table, wr_id, seq, subject, name, datetime, snippet, text,
+                      embedding, dim, model, indexed_at, content_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (bo_table, wr_id, seq, subject, name, dt, snippet, text,
+                     arr[i].tobytes(), dim, embed_model, now, h)
+                    for i, (wr_id, seq, subject, name, dt, snippet, text, h) in enumerate(chunk_rows)
+                ],
+            )
+
     if verbose:
-        print(f"  [post-index] {bo_table}: 글 {n_posts}개 / 청크 {len(rows)}개")
-    return n_posts
+        print(f"  [post-index] {bo_table}: 글 {len(current_ids)}개 "
+              f"(변경/신규 {len(changed)}, 삭제 {len(deleted)})")
+    return len(current_ids)
 
 
 def index_boards(
@@ -149,6 +186,7 @@ def index_boards(
     db_path,
     embed_model: str = "bge-m3",
     host: str = "http://127.0.0.1:11434",
+    force: bool = False,
     verbose: bool = True,
 ) -> dict[str, int]:
     """여러 게시판 인덱싱. {bo_table: 글 수} 반환."""
@@ -157,7 +195,7 @@ def index_boards(
         try:
             result[bo] = index_board(
                 client, bo, db_path=db_path, embed_model=embed_model,
-                host=host, verbose=verbose,
+                host=host, force=force, verbose=verbose,
             )
         except Exception as e:
             print(f"  [post-index] {bo}: 실패 — {e}")
