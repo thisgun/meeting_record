@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from .storage import connect
+from .vectorstore import cosine_topk, embed_texts, l2_normalize  # noqa: F401  (embed_texts 재노출)
 
 
 RAG_SCHEMA = """
@@ -120,34 +121,7 @@ def chunk_utterances(title: str, utterances: list[dict]) -> list[tuple[float, st
     return chunks
 
 
-# ── 임베딩 ──────────────────────────────────────────────────────
-
-
-def embed_texts(
-    texts: list[str],
-    *,
-    model: str = "bge-m3",
-    host: str = "http://127.0.0.1:11434",
-    batch_size: int = 32,
-    timeout: float = 300.0,
-) -> np.ndarray:
-    """텍스트 리스트 → L2 정규화된 float32 행렬 (N, dim)."""
-    try:
-        from ollama import Client
-    except ImportError as e:
-        raise RuntimeError("ollama 패키지가 필요합니다: pip install ollama") from e
-
-    client = Client(host=host, timeout=timeout)
-    vecs: list[list[float]] = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        resp = client.embed(model=model, input=batch)
-        embs = resp.get("embeddings") if isinstance(resp, dict) else resp.embeddings
-        vecs.extend(embs)
-    arr = np.asarray(vecs, dtype=np.float32)
-    norms = np.linalg.norm(arr, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return arr / norms
+# 임베딩은 src.vectorstore.embed_texts를 재사용한다 (상단에서 import + 재노출).
 
 
 # 검색용 청크 행렬 캐시. 매 질문마다 BLOB을 전부 디코딩하지 않도록
@@ -319,15 +293,9 @@ def search_chunks(
         return []
 
     qvec = embed_texts([query], model=embed_model, host=host, timeout=embed_timeout)[0]
-    scores = mat @ qvec
-    order = np.argsort(-scores)[: max(1, int(top_k))]
-
     out = []
-    for i in order:
-        score = float(scores[int(i)])
-        if min_score and score < min_score:
-            continue  # 점수 임계값 미만 청크 제외 (무관한 회의가 출처에 섞이는 것 방지)
-        item = dict(meta[int(i)])
+    for i, score in cosine_topk(mat, qvec, top_k=top_k, min_score=min_score):
+        item = dict(meta[i])
         item["score"] = score
         out.append(item)
     return out

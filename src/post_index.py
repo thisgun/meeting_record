@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from .embeddings import embed_texts
 from .storage import connect
+from .vectorstore import cosine_topk, embed_texts
 
 
 POST_SCHEMA = """
@@ -188,19 +188,19 @@ def search_posts(
 
     mat = np.stack([np.frombuffer(c["embedding"], dtype=np.float32) for c in chunks])
     qvec = embed_texts([query], model=embed_model, host=host)[0]
-    scores = mat @ qvec
 
+    # 점수 내림차순으로 순회하며 글(bo_table, wr_id) 단위 최고 점수만 취해 top_k개 수집
     best: dict[tuple, dict] = {}
-    for c, s in zip(chunks, scores):
-        score = float(s)
-        if min_score and score < min_score:
-            continue
+    for i, score in cosine_topk(mat, qvec, top_k=len(chunks), min_score=min_score):
+        c = chunks[i]
         key = (c["bo_table"], c["wr_id"])
-        if key not in best or score > best[key]["score"]:
+        if key not in best:
             best[key] = {
                 "bo_table": c["bo_table"], "wr_id": c["wr_id"],
                 "subject": c["subject"], "name": c["name"],
                 "datetime": c["datetime"], "snippet": c["snippet"],
                 "score": score,
             }
-    return sorted(best.values(), key=lambda d: -d["score"])[: max(1, int(top_k))]
+        if len(best) >= max(1, int(top_k)):
+            break
+    return list(best.values())
