@@ -283,6 +283,16 @@ C:\xampp\htdocs\gnuboard5\plugin\meeting_api\
 
 원격 서버에서도 같은 원칙입니다. ZIP 안의 `plugin/meeting_api/` 폴더를 그누보드5의 `plugin/` 폴더 안에 업로드하면 됩니다.
 
+**로컬 동기화 스크립트**: 정본(`g5_meeting_api/plugin/meeting_api/`)을 수정한 뒤에는
+배포본으로 복사해야 합니다. `main`을 pull한 뒤 이 복사를 빠뜨리면 배포본이 구버전으로 남아
+신규 엔드포인트가 404로 실패합니다. 다음 스크립트가 자동화합니다(`config.local.php`는 보존):
+
+```powershell
+pwsh scripts/deploy_plugin.ps1            # 기본 대상에 동기화
+pwsh scripts/deploy_plugin.ps1 -DryRun    # 복사 없이 대상만 확인
+pwsh scripts/deploy_plugin.ps1 -Target D:\web\gnuboard5\plugin\meeting_api
+```
+
 ---
 
 ## 4. 데이터 흐름 (실행 순서)
