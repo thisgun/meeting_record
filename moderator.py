@@ -263,14 +263,24 @@ def main(argv: list[str] | None = None) -> int:
     log(f"분류 모델: {cfg.mod_model} / 폴링: {cfg.mod_poll_sec}초")
     log("=" * 60)
 
+    from src.notifier import notify_alert
+
+    alerted = False  # 폴링 오류 알림 중복 방지
     try:
         while True:
             try:
                 n = poll_once(cfg, client)
                 if n:
                     log(f"이번 폴링에서 {n}건 처리")
+                if alerted:
+                    notify_alert("moderator 복구됨", "게시판 모더레이션 폴링이 정상화되었습니다.", success=True)
+                    alerted = False
             except Exception as e:
                 log(f"폴링 오류: {e}")
+                if not alerted:
+                    notify_alert("moderator 폴링 오류",
+                                 f"게시판 모더레이션 폴링이 실패했습니다. Ollama/그누보드 상태를 확인하세요.\n{e}")
+                    alerted = True
             if args.once:
                 break
             time.sleep(cfg.mod_poll_sec)

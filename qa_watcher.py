@@ -250,7 +250,10 @@ def main(argv: list[str] | None = None) -> int:
     if n:
         log(f"시작 인덱싱: 회의 {n}건")
 
+    from src.notifier import notify_alert
+
     retry = args.retry_failed
+    alerted = False  # 폴링 오류 알림 중복 방지 (실패 진입 시 1회, 복구 시 1회)
     try:
         while True:
             try:
@@ -258,8 +261,15 @@ def main(argv: list[str] | None = None) -> int:
                 retry = False  # 재시도는 첫 폴링에서만
                 if handled:
                     log(f"이번 폴링에서 {handled}건 처리")
+                if alerted:
+                    notify_alert("qa_watcher 복구됨", "질문 게시판 폴링이 정상화되었습니다.", success=True)
+                    alerted = False
             except Exception as e:
                 log(f"폴링 오류: {e}")
+                if not alerted:
+                    notify_alert("qa_watcher 폴링 오류",
+                                 f"질문 게시판 폴링이 실패했습니다. Ollama/그누보드 상태를 확인하세요.\n{e}")
+                    alerted = True
             if args.once:
                 break
             time.sleep(cfg.qa_poll_sec)

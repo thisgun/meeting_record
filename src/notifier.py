@@ -181,6 +181,30 @@ def notify_meeting_failed(
     return slack_ok or email_ok
 
 
+def notify_alert(
+    title: str,
+    body: str = "",
+    *,
+    success: bool = False,
+    color: Optional[str] = None,
+) -> bool:
+    """범용 운영 알림 (워처 폴링 오류/복구 등). NOTIFY_LEVEL 정책을 따른다."""
+    if not _should_send(success=success):
+        return False
+    icon = "✅" if success else "⚠️"
+    text = f"{icon} *{title}*"
+    if body:
+        text += f"\n{body[:800]}"
+    slack_ok = _send_slack(text, color=color or ("good" if success else "warning"))
+    email_ok = _send_email(f"[meeting_record] {title}", f"{title}\n\n{body}".strip())
+    if slack_ok or email_ok:
+        channels = []
+        if slack_ok: channels.append("Slack")
+        if email_ok: channels.append("이메일")
+        print(f"    [알림] {', '.join(channels)} 전송")
+    return slack_ok or email_ok
+
+
 def is_configured() -> dict:
     """현재 알림 설정 상태 반환 (doctor.py에서 호출)."""
     return {
