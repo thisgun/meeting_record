@@ -37,6 +37,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydub>=0.25.1",
     "psutil>=5.9.0",
+    "numpy>=1.24.0",
     "streamlit>=1.50.0",
     "python-docx>=1.0.0",
     "watchdog>=4.0.0",
@@ -53,6 +54,10 @@ meeting-compare = "meeting_record.cli:compare"
 meeting-dict = "meeting_record.cli:dictionary"
 meeting-enroll = "meeting_record.cli:enroll"
 meeting-watch = "meeting_record.cli:watch"
+meeting-ask = "meeting_record.cli:ask"
+meeting-qa = "meeting_record.cli:qa_watch"
+meeting-semantic-index = "meeting_record.cli:semantic_index"
+meeting-moderate = "meeting_record.cli:moderate"
 
 [project.optional-dependencies]
 korean-nlp = ["kiwipiepy>=0.20.0"]
@@ -71,6 +76,7 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 py-modules = [
     "app",
+    "ask",
     "compare",
     "config",
     "dict",
@@ -78,7 +84,10 @@ py-modules = [
     "enroll",
     "export",
     "main",
+    "moderator",
+    "qa_watcher",
     "search",
+    "semantic_index",
     "stats",
     "watcher",
 ]

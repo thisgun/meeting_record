@@ -46,6 +46,22 @@ def init_rag_schema(db_path) -> None:
         conn.executescript(RAG_SCHEMA)
 
 
+# 요약 생성에 실패했거나 내용이 비어 검색 노이즈만 되는 회의를 인덱싱에서 제외하는 마커.
+# 정상 요약은 수백 자이므로, 길이 기준은 사실상 '거의 빈 요약'만 걸러낸다(주력은 마커).
+_LOW_QUALITY_MARKERS = ("자동 생성 실패", "요약 파싱 실패", "요약 생성 실패")
+_MIN_SUMMARY_CHARS = 10
+
+
+def is_indexable(title: str, summary_md: str) -> bool:
+    """요약이 정상 생성된 회의인지. 실패/빈 요약은 인덱싱에서 제외한다."""
+    title = (title or "").strip()
+    summary = (summary_md or "").strip()
+    if len(summary) < _MIN_SUMMARY_CHARS:
+        return False
+    haystack = f"{title}\n{summary}"
+    return not any(marker in haystack for marker in _LOW_QUALITY_MARKERS)
+
+
 # ── 청킹 ────────────────────────────────────────────────────────
 
 
@@ -134,6 +150,52 @@ def embed_texts(
     return arr / norms
 
 
+# 검색용 청크 행렬 캐시. 매 질문마다 BLOB을 전부 디코딩하지 않도록
+# (db_path, model)별로 (행렬, 메타, 청크수)를 메모리에 보관하고 청크 수가
+# 바뀌면 무효화한다. 단일 프로세스(ask 1회/qa_watcher 폴링)에 충분.
+_MATRIX_CACHE: dict[tuple[str, str], tuple[int, np.ndarray, list[dict]]] = {}
+
+
+def _load_chunk_matrix(db_path, embed_model: str) -> tuple[np.ndarray, list[dict]]:
+    """(행렬, 메타리스트) 반환. 청크 수가 그대로면 캐시 재사용."""
+    with connect(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM rag_chunks WHERE model = ?", (embed_model,)
+        ).fetchone()[0]
+
+    key = (str(db_path), embed_model)
+    cached = _MATRIX_CACHE.get(key)
+    if cached and cached[0] == count:
+        return cached[1], cached[2]
+
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT c.id, c.meeting_id, c.kind, c.start_sec, c.text, c.embedding,
+                      m.title, m.created_at, m.remote_post_id
+               FROM rag_chunks c JOIN meetings m ON m.id = c.meeting_id
+               WHERE c.model = ?""",
+            (embed_model,),
+        ).fetchall()
+    if not rows:
+        empty = np.empty((0, 0), dtype=np.float32)
+        _MATRIX_CACHE[key] = (0, empty, [])
+        return empty, []
+
+    mat = np.stack([np.frombuffer(r["embedding"], dtype=np.float32) for r in rows])
+    meta = [{
+        "chunk_id": r["id"], "meeting_id": r["meeting_id"], "kind": r["kind"],
+        "start_sec": r["start_sec"], "text": r["text"], "title": r["title"],
+        "created_at": r["created_at"], "remote_post_id": r["remote_post_id"],
+    } for r in rows]
+    _MATRIX_CACHE[key] = (count, mat, meta)
+    return mat, meta
+
+
+def invalidate_matrix_cache() -> None:
+    """인덱싱 후 캐시 강제 무효화 (테스트/장시간 데몬용)."""
+    _MATRIX_CACHE.clear()
+
+
 # ── 인덱싱 ──────────────────────────────────────────────────────
 
 
@@ -164,6 +226,14 @@ def index_meeting(
             (int(meeting_id),),
         ).fetchall()
 
+    # 요약 실패/빈 회의는 검색 노이즈만 되므로 인덱싱하지 않는다 (기존 청크가 있으면 정리).
+    if not is_indexable(meeting["title"], meeting["summary_md"]):
+        if existing:
+            with connect(db_path) as conn:
+                conn.execute("DELETE FROM rag_chunks WHERE meeting_id = ?", (int(meeting_id),))
+            invalidate_matrix_cache()
+        return 0
+
     title = meeting["title"]
     items: list[tuple[str, float | None, str]] = []  # (kind, start_sec, text)
     for text in chunk_summary(title, meeting["summary_md"] or ""):
@@ -188,6 +258,7 @@ def index_meeting(
                 for seq, (kind, start_sec, text) in enumerate(items)
             ],
         )
+    invalidate_matrix_cache()
     return len(items)
 
 
@@ -203,16 +274,19 @@ def index_all(
     init_rag_schema(db_path)
     with connect(db_path) as conn:
         if force:
-            ids = [r[0] for r in conn.execute("SELECT id FROM meetings ORDER BY id")]
+            rows = conn.execute("SELECT id, title, summary_md FROM meetings ORDER BY id").fetchall()
         else:
-            ids = [r[0] for r in conn.execute(
-                """SELECT m.id FROM meetings m
+            rows = conn.execute(
+                """SELECT m.id, m.title, m.summary_md FROM meetings m
                    WHERE NOT EXISTS (
                        SELECT 1 FROM rag_chunks c
                        WHERE c.meeting_id = m.id AND c.model = ?)
                    ORDER BY m.id""",
                 (embed_model,),
-            )]
+            ).fetchall()
+    # not force: 저품질 회의는 호출 전에 걸러 매 폴링마다 재시도하지 않도록 한다.
+    # force(재구축): 저품질 회의도 index_meeting을 거쳐 기존 청크를 정리한다.
+    ids = [r["id"] for r in rows if force or is_indexable(r["title"], r["summary_md"])]
     done = 0
     for mid in ids:
         n = index_meeting(db_path, mid, embed_model=embed_model, host=host, force=True)
@@ -232,42 +306,30 @@ def search_chunks(
     embed_model: str = "bge-m3",
     host: str = "http://127.0.0.1:11434",
     top_k: int = 6,
+    embed_timeout: float = 300.0,
+    min_score: float = 0.0,
 ) -> list[dict]:
     """질문과 가장 유사한 청크 top_k 반환.
 
     반환 dict: meeting_id, kind, start_sec, text, score, title, created_at, remote_post_id
     """
     init_rag_schema(db_path)
-    with connect(db_path) as conn:
-        rows = conn.execute(
-            """SELECT c.id, c.meeting_id, c.kind, c.start_sec, c.text, c.embedding, c.dim,
-                      m.title, m.created_at, m.remote_post_id
-               FROM rag_chunks c JOIN meetings m ON m.id = c.meeting_id
-               WHERE c.model = ?""",
-            (embed_model,),
-        ).fetchall()
-    if not rows:
+    mat, meta = _load_chunk_matrix(db_path, embed_model)
+    if not meta:
         return []
 
-    mat = np.stack([np.frombuffer(r["embedding"], dtype=np.float32) for r in rows])
-    qvec = embed_texts([query], model=embed_model, host=host)[0]
+    qvec = embed_texts([query], model=embed_model, host=host, timeout=embed_timeout)[0]
     scores = mat @ qvec
     order = np.argsort(-scores)[: max(1, int(top_k))]
 
     out = []
     for i in order:
-        r = rows[int(i)]
-        out.append({
-            "chunk_id": r["id"],
-            "meeting_id": r["meeting_id"],
-            "kind": r["kind"],
-            "start_sec": r["start_sec"],
-            "text": r["text"],
-            "score": float(scores[int(i)]),
-            "title": r["title"],
-            "created_at": r["created_at"],
-            "remote_post_id": r["remote_post_id"],
-        })
+        score = float(scores[int(i)])
+        if min_score and score < min_score:
+            continue  # 점수 임계값 미만 청크 제외 (무관한 회의가 출처에 섞이는 것 방지)
+        item = dict(meta[int(i)])
+        item["score"] = score
+        out.append(item)
     return out
 
 

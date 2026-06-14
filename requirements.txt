@@ -24,6 +24,9 @@ python-dotenv>=1.0.0
 pydub>=0.25.1
 psutil>=5.9.0
 
+# RAG 챗봇 (ask.py / qa_watcher.py) — 벡터 검색용. 임베딩 모델은 'ollama pull bge-m3'.
+numpy>=1.24.0
+
 # UI / export / analysis
 streamlit>=1.50.0
 python-docx>=1.0.0

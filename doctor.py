@@ -286,6 +286,58 @@ def check_sqlite_search():
         warn("SQLite FTS 확인 실패", str(e)[:160])
 
 
+def check_rag():
+    section("RAG 챗봇 (ask / qa_watcher)")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from config import load_config
+    cfg = load_config()
+
+    try:
+        import numpy
+        ok("numpy", f"v{numpy.__version__}")
+    except ImportError:
+        fail("numpy 없음", "pip install numpy — RAG 벡터 검색에 필수")
+
+    # 임베딩 모델 설치 여부 (bge-m3 == bge-m3:latest 도 매칭)
+    host = cfg.ollama_host.rstrip("/")
+    want = cfg.embed_model.split(":")[0]
+    try:
+        import json
+        import urllib.request
+        with urllib.request.urlopen(f"{host}/api/tags", timeout=3) as r:
+            names = [m["name"] for m in json.loads(r.read()).get("models", [])]
+        if any(n == cfg.embed_model or n.split(":")[0] == want for n in names):
+            ok("EMBED_MODEL 설치됨", cfg.embed_model)
+        else:
+            warn(f"EMBED_MODEL 미설치: {cfg.embed_model}", f"ollama pull {cfg.embed_model}")
+    except Exception as e:
+        warn("임베딩 모델 확인 실패", str(e)[:80])
+
+    # 인덱스 현황
+    try:
+        from src.storage import connect
+        with connect(cfg.db_path) as conn:
+            total = conn.execute("SELECT COUNT(*) FROM meetings").fetchone()[0]
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT meeting_id), COUNT(*) FROM rag_chunks WHERE model = ?",
+                (cfg.embed_model,),
+            ).fetchone()
+        n_meet, n_chunk = int(row[0] or 0), int(row[1] or 0)
+        if n_chunk:
+            detail = f"{n_meet}/{total} 회의 · {n_chunk}청크 ({cfg.embed_model})"
+            if n_meet < total:
+                warn("RAG 인덱스 일부 누락", detail + " — python ask.py --index 로 보강")
+            else:
+                ok("RAG 인덱스", detail)
+        else:
+            warn("RAG 인덱스 비어있음", "python ask.py --index 로 기존 회의 인덱싱")
+    except Exception:
+        warn("RAG 인덱스 없음", "python ask.py --index 로 생성")
+
+    ok("RAG 설정",
+       f"TOP_K={cfg.rag_top_k} · MIN_SCORE={cfg.rag_min_score} · QA_BO_TABLE={cfg.qa_bo_table}")
+
+
 def check_notifier():
     section("알림 설정")
     try:
@@ -355,7 +407,7 @@ def check_g5_targets():
 def check_packages():
     section("Python 핵심 패키지")
     deps = ["faster_whisper", "torch", "torchaudio",
-            "speechbrain", "sklearn", "soundfile", "ollama",
+            "speechbrain", "sklearn", "numpy", "soundfile", "ollama",
             "dotenv", "psutil", "watchdog", "docx", "streamlit", "huggingface_hub"]
     for d in deps:
         try:
@@ -393,6 +445,7 @@ def main() -> int:
     check_streamlit()
     check_keyword_extractor()
     check_sqlite_search()
+    check_rag()
     check_notifier()
     check_config()
     print()

@@ -309,6 +309,37 @@ class G5MeetingApiClient(G5ClientBase):
         data = self._post("list_comments.php", payload)
         return list(data.get("comments") or [])
 
+    def list_questions(
+        self,
+        bo_table: Optional[str] = None,
+        *,
+        since_wr_id: int = 0,
+        limit: int = 20,
+    ) -> list[dict]:
+        """질문 게시판의 새 글 목록 (RAG 챗봇 qa_watcher 폴링용)."""
+        payload = {
+            "bo_table": bo_table or self.bo_table,
+            "since_wr_id": int(since_wr_id),
+            "limit": int(limit),
+        }
+        data = self._post("questions.php", payload)
+        return list(data.get("questions") or [])
+
+    def list_posts(
+        self,
+        bo_table: str,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> dict:
+        """게시판 글을 배치로 반환 (시맨틱 검색 인덱싱용). {total, posts, ...}."""
+        payload = {
+            "bo_table": bo_table,
+            "offset": int(offset),
+            "limit": int(limit),
+        }
+        return self._post("posts.php", payload)
+
     def update_comment(
         self,
         comment_id: int,
@@ -332,6 +363,15 @@ class G5MeetingApiClient(G5ClientBase):
             "bo_table": bo_table or self.bo_table,
         }
         return self._post("delete_post.php", payload, max_retries=0)
+
+    def hide_post(self, wr_id: int, bo_table: Optional[str] = None, *, hidden: bool = True) -> dict:
+        """글을 비밀글(secret)로 전환/해제 (모더레이션 소프트 숨김)."""
+        payload = {
+            "wr_id": int(wr_id),
+            "bo_table": bo_table or self.bo_table,
+            "hidden": bool(hidden),
+        }
+        return self._post("hide_post.php", payload, max_retries=0)
 
     def cleanup_test_posts(
         self,

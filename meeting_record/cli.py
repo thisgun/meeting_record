@@ -76,3 +76,19 @@ def enroll() -> int:
 
 def watch() -> int:
     return _run("watcher")
+
+
+def ask() -> int:
+    return _run("ask")
+
+
+def qa_watch() -> int:
+    return _run("qa_watcher")
+
+
+def semantic_index() -> int:
+    return _run("semantic_index")
+
+
+def moderate() -> int:
+    return _run("moderator")

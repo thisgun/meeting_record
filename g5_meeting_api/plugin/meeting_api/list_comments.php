@@ -23,7 +23,8 @@ $post = sql_fetch("SELECT wr_id, wr_10 FROM $write_table_sql WHERE wr_id = '$m_w
 if (!$post) {
     api_error(404, "Parent post not found: wr_id=$m_wr_id");
 }
-meeting_require_api_owned_marker($post['wr_10'] ?? '');
+// 읽기 전용이므로 marker를 요구하지 않는다 (질문 게시판 글은 사람이 작성해 marker가 없음).
+// 수정/삭제 엔드포인트(update/delete)에서만 marker로 봇 소유를 강제한다.
 
 $result = sql_query("SELECT wr_id, wr_parent, wr_name, wr_content, wr_datetime, wr_comment
     FROM $write_table_sql

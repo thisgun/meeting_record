@@ -290,7 +290,7 @@ _drain_remote_messages()
 
 
 # ── 사이드바: 페이지 선택 ─────────────────────────────────
-PAGES = ["📋 회의 목록", "🔍 검색", "📊 비교", "📚 사전 관리", "👤 화자 등록"]
+PAGES = ["📋 회의 목록", "🔍 검색", "💬 AI 질의", "📊 비교", "📚 사전 관리", "👤 화자 등록"]
 with st.sidebar:
     st.title("📝 회의록 관리")
     page = st.radio("페이지", PAGES, label_visibility="collapsed")
@@ -555,6 +555,61 @@ def render_search():
 
 
 # ────────────────────────────────────────────────────────
+# AI 질의 (RAG)
+# ────────────────────────────────────────────────────────
+def render_rag():
+    st.header("💬 AI 질의 (RAG)")
+    st.caption("회의록을 근거로 자연어 질문에 답합니다. 후속 질문으로 이어서 물어볼 수 있습니다.")
+    cfg = get_cfg()
+    storage.init_db(cfg.db_path)
+
+    # 무거운 의존성은 이 페이지에서만 지연 로드
+    from src.embeddings import index_all
+    from src.rag import answer_question
+
+    with st.sidebar:
+        st.divider()
+        if st.button("🔄 RAG 인덱스 갱신"):
+            with st.spinner("인덱싱 중..."):
+                n = index_all(cfg.db_path, embed_model=cfg.embed_model,
+                              host=cfg.ollama_host, verbose=False)
+            st.success(f"인덱싱 완료 (대상 {n}건)")
+        if st.button("🗑 대화 초기화"):
+            st.session_state["rag_history"] = []
+            st.rerun()
+
+    history = st.session_state.setdefault("rag_history", [])
+    for m in history:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    q = st.chat_input("회의록에 대해 질문하세요 (예: 지난달 산업안전 회의에서 뭐 결정했어?)")
+    if not q:
+        if not history:
+            st.info("질문을 입력하세요. 답변이 빈약하면 사이드바에서 'RAG 인덱스 갱신'을 먼저 누르세요.")
+        return
+
+    with st.chat_message("user"):
+        st.markdown(q)
+    with st.chat_message("assistant"):
+        with st.spinner("검색 및 답변 생성 중... (모델 콜드 로딩 시 시간이 걸릴 수 있습니다)"):
+            try:
+                result = answer_question(cfg, q, history=history, auto_index=False)
+            except Exception as e:
+                st.error(f"답변 실패: {e}")
+                result = None
+        if result:
+            st.markdown(result["answer_with_sources"])
+
+    if result:
+        history.append({"role": "user", "content": q})
+        history.append({"role": "assistant", "content": result["answer"]})
+        # 맥락이 무한정 커지지 않도록 최근 6턴(12메시지)만 유지
+        if len(history) > 12:
+            del history[: len(history) - 12]
+
+
+# ────────────────────────────────────────────────────────
 # 비교
 # ────────────────────────────────────────────────────────
 def render_compare():
@@ -790,6 +845,8 @@ if page == "📋 회의 목록":
     render_meeting_list()
 elif page == "🔍 검색":
     render_search()
+elif page == "💬 AI 질의":
+    render_rag()
 elif page == "📊 비교":
     render_compare()
 elif page == "📚 사전 관리":

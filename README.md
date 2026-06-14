@@ -1317,20 +1317,22 @@ python ask.py --index     # 기존 회의록 전체 인덱싱 (신규 회의는 
 
 ```powershell
 python ask.py "산업안전 회의에서 결정된 사항이 뭐야?"
-python ask.py "지게차 사고 관련해서 누가 뭐라고 했어?" --show-hits   # 검색 청크도 출력
+python ask.py --chat                                                # 대화형 모드 (이어서 후속 질문)
+python ask.py "지게차 사고 관련해서 누가 뭐라고 했어?" --show-hits   # 검색 청크·점수도 출력
 python ask.py --rebuild                                              # 전체 재인덱싱
 ```
 
-답변 하단에 참고한 회의록 목록과 그누보드5 게시글 링크가 붙습니다.
+답변 하단에 참고한 회의록 목록과 그누보드5 게시글 링크가 붙습니다. **답변에 실제 인용된
+회의만 출처로 표기**되며, `RAG_MIN_SCORE` 미만으로 유사도가 낮은 청크와 요약 생성에
+실패한 회의는 검색에서 제외돼 무관한 회의가 출처에 섞이지 않습니다.
+
+**웹 UI에서 질문:** Streamlit 앱(`streamlit run app.py`)의 사이드바 **💬 AI 질의**
+페이지에서 채팅 형태로 질문·후속 질문을 할 수 있습니다.
 
 **그누보드5 질문 게시판 자동 답변:**
 
-질문 게시판을 만들고 (1회):
-
-```
-http://127.0.0.1/gnuboard5/plugin/meeting_api/setup_board.php?token=YOUR_TOKEN&bo_table=ask&subject=회의록 Q%26A
-```
-
+질문 게시판(`ask`)을 그누보드5 관리자에서 만들거나, `config.local.php`에
+`meeting_API_ALLOW_SETUP=true`를 둔 뒤 `setup_board.php`(POST)로 생성합니다.
 데몬을 켜두면 게시판에 올라온 질문 글에 자동으로 답변 댓글이 달립니다:
 
 ```powershell
@@ -1339,9 +1341,66 @@ python qa_watcher.py --once         # 한 번만 확인 (테스트용)
 python qa_watcher.py --retry-failed # 실패했던 질문 재시도
 ```
 
-처리 상태는 `meetings.db`의 `qa_answers` 테이블에 기록되어 중복 답변을 방지하고,
-이력은 `data/qa_watch.log`에 남습니다. 관련 설정은 `.env`의
-`EMBED_MODEL`, `RAG_TOP_K`, `QA_BO_TABLE`, `QA_POLL_SEC`, `QA_BOT_NAME`.
+질문 글에 봇이 답한 뒤 **같은 글에 댓글로 다시 물으면 이전 대화를 맥락으로 이어서
+답변**합니다(게시판 멀티턴). 처리 상태는 `meetings.db`의 `qa_answers` 테이블에
+기록되어 중복 답변을 방지하고, 이력은 `data/qa_watch.log`에 남습니다.
+관련 설정은 `.env`의 `EMBED_MODEL`, `RAG_TOP_K`, `RAG_MIN_SCORE`,
+`QA_BO_TABLE`, `QA_POLL_SEC`, `QA_BOT_NAME`. 설치·인덱스 상태는 `python doctor.py`의
+**RAG 챗봇** 섹션에서 확인할 수 있습니다.
+
+### 게시판 의미 검색 (semantic_index / semantic_search.php)
+
+그누보드5 기본 검색은 LIKE 기반이라 "환불 규정"으로 검색하면 "반품 정책" 글을 놓칩니다.
+게시판 글을 임베딩해 두면 **단어가 달라도 의미가 비슷한 글**을 찾습니다(오래된 게시판일수록 가치가 큽니다).
+
+RAG 챗봇과 같은 임베딩 인프라(`bge-m3`)를 공유하되 대상이 회의록이 아니라 임의 게시판입니다.
+인덱싱만 Python으로 주기 실행하고 **검색은 PHP가 직접 수행**하므로 상시 Python 서비스가 필요 없습니다.
+
+**준비:**
+
+```powershell
+# 1) .env의 SEMANTIC_BOARDS에 대상 게시판 지정 (예: free,notice,qa)
+# 2) 인덱싱
+python semantic_index.py                       # SEMANTIC_BOARDS 전체 인덱싱
+python semantic_index.py free notice           # 특정 게시판만
+python semantic_index.py --search "환불 규정"   # (디버그) 파이썬에서 검색 테스트
+```
+
+3) `config.local.php`에 posts.db 절대경로를 지정합니다:
+
+```php
+define('meeting_SEMANTIC_DB_PATH', 'C:/dev2/metting_record/data/posts.db');
+```
+
+**검색 페이지:** `http://YOUR-HOST/gnuboard5/plugin/meeting_api/semantic_search.php?q=환불 규정`
+(특정 게시판만: `&bo_table=free`)
+
+게시글이 추가/수정되면 `semantic_index.py`를 다시 실행해 인덱스를 갱신합니다(스케줄러 등록 시 자동화).
+관련 설정: `.env`의 `SEMANTIC_BOARDS`·`SEMANTIC_DB_PATH`·`EMBED_MODEL`, PHP는 `config.php`의 `meeting_SEMANTIC_*`.
+
+### 게시판 AI 모더레이터 / 자동 태깅 (moderator.py)
+
+게시판의 새 글·댓글을 Ollama로 분류해 **스팸/광고/욕설은 신고(또는 자동 숨김), 정상 긴 글에는
+3줄 요약·태그를 자동으로** 답니다. 운영 게시판에서 바로 실용성이 나옵니다.
+
+> ⚠️ **모델 주의**: gemma 계열은 안전정렬 때문에 유해 글 분류 요청을 거부(빈 응답)합니다.
+> `MOD_MODEL`에는 분류에 적합한 모델(`qwen2.5:3b` 빠름 / `exaone3.5:7.8b` 정확)을 지정하세요.
+
+```powershell
+python moderator.py          # 폴링 시작 (Ctrl+C 종료)
+python moderator.py --once   # 한 번만 확인 (테스트용)
+```
+
+- **분류**: spam(도배/피싱) · ad(광고) · abuse(욕설/비방) · normal + 신뢰도
+- **문제 글**: `MOD_REPORT_BOARD` 게시판에 신고글 등록(분류·신뢰도·근거·원문·링크).
+  `MOD_AUTO_HIDE=1`이면 신뢰도 `MOD_HIDE_THRESHOLD` 이상일 때 비밀글로 자동 숨김
+  (삭제가 아니라 복구 가능한 소프트 숨김 — 오탐에 안전).
+- **정상 긴 글**(`MOD_SUMMARY_MIN_CHARS`자 이상): 3줄 요약 + 검색 태그를 봇 댓글로 추가.
+- 처리 상태는 `meetings.db`의 `moderation` 테이블에 기록해 중복 처리를 막습니다(`data/moderator.log`).
+
+신고 게시판(`MOD_REPORT_BOARD=report`)은 그누보드5 관리자에서 미리 만들어 두세요.
+관련 설정: `.env`의 `MOD_MODEL`·`MOD_BOARDS`·`MOD_REPORT_BOARD`·`MOD_AUTO_HIDE`·
+`MOD_HIDE_THRESHOLD`·`MOD_SUMMARY_MIN_CHARS`·`MOD_MODERATE_COMMENTS`.
 
 ### 폴더 자동 감시 (watcher)
 

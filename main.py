@@ -387,6 +387,20 @@ def run_pipeline(
     )
     print(f"    → meeting_id={meeting_id}")
 
+    # RAG 인덱싱 (자연어 질의응답용). 임베딩 모델 미설치/실패는 회의 저장·업로드와
+    # 무관하므로 경고만 남기고 계속 진행한다. ('ollama pull bge-m3' 후 ask.py --index로 보강 가능)
+    try:
+        from src.embeddings import index_meeting
+        n_chunks = index_meeting(
+            cfg.db_path, meeting_id,
+            embed_model=cfg.embed_model, host=cfg.ollama_host, force=True,
+        )
+        if n_chunks:
+            print(f"    → RAG 인덱싱 {n_chunks}청크 (python ask.py \"질문\" 으로 질의 가능)")
+    except Exception as e:
+        print(f"    [warn] RAG 인덱싱 건너뜀: {e}")
+        print("    [hint] 'ollama pull bge-m3' 후 'python ask.py --index'로 나중에 인덱싱할 수 있습니다.")
+
     # 5) 결과 미리보기
     _print_step(5, total_steps, "요약 미리보기")
     print("─" * 60)

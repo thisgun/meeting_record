@@ -49,8 +49,22 @@ class Config:
     # RAG 챗봇 (ask.py / qa_watcher.py)
     embed_model: str                  # Ollama 임베딩 모델 (예: bge-m3)
     rag_top_k: int                    # 검색할 청크 수
+    rag_min_score: float              # 이 코사인 점수 미만 벡터 청크는 제외 (0=비활성)
     qa_bo_table: str                  # 질문 게시판 bo_table
     qa_poll_sec: float                # 질문 게시판 폴링 주기(초)
+    # 게시판 시맨틱 검색 (semantic_index.py / semantic_search.php)
+    semantic_boards: tuple[str, ...]  # 인덱싱 대상 게시판 bo_table 목록
+    semantic_db_path: Path            # 게시글 임베딩 SQLite (PHP 검색 페이지와 공유)
+    # AI 모더레이터/자동 태깅 (moderator.py)
+    mod_model: str                    # 분류/요약 모델 (안전정렬이 약한 모델 권장: gemma는 유해글 분류를 거부)
+    mod_boards: tuple[str, ...]       # 모더레이션 대상 게시판 bo_table 목록
+    mod_report_board: str             # 문제 글 신고를 모을 게시판 (빈 값이면 DB 기록만)
+    mod_poll_sec: float               # 폴링 주기(초)
+    mod_bot_name: str                 # 봇 작성자명 (신고/요약 댓글)
+    mod_auto_hide: bool               # 스팸/욕설 자동 숨김(비밀글 처리) 여부
+    mod_hide_threshold: float         # 자동 숨김 최소 신뢰도 (0~1)
+    mod_summary_min_chars: int        # 이 길이 이상 정상 글에 요약·태그 댓글
+    mod_moderate_comments: bool       # 댓글도 모더레이션할지
 
 
 def _path(env_key: str, default: str) -> Path:
@@ -61,6 +75,16 @@ def _path(env_key: str, default: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     if env_key != "DB_PATH":
         p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _db_file_path(env_key: str, default: str) -> Path:
+    """DB 파일 경로(부모 디렉터리만 생성, 파일 자체는 만들지 않음)."""
+    raw = os.getenv(env_key, default)
+    p = Path(raw)
+    if not p.is_absolute():
+        p = PROJECT_ROOT / p
+    p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
@@ -246,7 +270,23 @@ def load_config() -> Config:
         work_dir=_path("WORK_DIR", "./data/work"),
         upload_dir=_path("UPLOAD_DIR", "./data/uploads"),
         embed_model=os.getenv("EMBED_MODEL", "bge-m3"),
-        rag_top_k=int(os.getenv("RAG_TOP_K", "6")),
+        rag_top_k=_int_env("RAG_TOP_K", 6, minimum=1),
+        rag_min_score=_float_env("RAG_MIN_SCORE", 0.35, minimum=0.0),
         qa_bo_table=os.getenv("QA_BO_TABLE", "ask"),
-        qa_poll_sec=float(os.getenv("QA_POLL_SEC", "20")),
+        qa_poll_sec=_float_env("QA_POLL_SEC", 20.0, minimum=1.0),
+        semantic_boards=tuple(
+            b.strip() for b in (os.getenv("SEMANTIC_BOARDS", "free")).split(",") if b.strip()
+        ),
+        semantic_db_path=_db_file_path("SEMANTIC_DB_PATH", "./data/posts.db"),
+        mod_model=os.getenv("MOD_MODEL", "qwen2.5:3b"),
+        mod_boards=tuple(
+            b.strip() for b in (os.getenv("MOD_BOARDS", "free")).split(",") if b.strip()
+        ),
+        mod_report_board=os.getenv("MOD_REPORT_BOARD", "").strip(),
+        mod_poll_sec=_float_env("MOD_POLL_SEC", 30.0, minimum=1.0),
+        mod_bot_name=os.getenv("MOD_BOT_NAME", "AI 모더레이터"),
+        mod_auto_hide=_bool_env("MOD_AUTO_HIDE", False),
+        mod_hide_threshold=_float_env("MOD_HIDE_THRESHOLD", 0.85, minimum=0.0),
+        mod_summary_min_chars=_int_env("MOD_SUMMARY_MIN_CHARS", 400, minimum=0),
+        mod_moderate_comments=_bool_env("MOD_MODERATE_COMMENTS", True),
     )

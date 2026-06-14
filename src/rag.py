@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 
 from .embeddings import search_chunks, index_all
+from .g5_client import _public_post_url_from_api_base
+from .runtime_memory import format_snapshot, wait_for_min_free_ram
 from .storage import connect
 
 
@@ -21,7 +23,7 @@ ANSWER_SYSTEM_PROMPT = """당신은 회의록 검색 비서입니다. 아래 제
 
 **규칙:**
 1. 발췌에 있는 내용만 사용하십시오. 발췌에 없는 내용은 추측하지 말고 "회의록에서 관련 내용을 찾지 못했습니다"라고 답하십시오.
-2. 답변 중 근거가 된 부분에는 출처 번호를 [출처 1]처럼 표기하십시오.
+2. 답변에 근거로 사용한 회의는 반드시 [출처 1]처럼 출처 번호를 표기하십시오. **관련 내용을 찾지 못해 답하지 못할 때는 출처 번호를 표기하지 마십시오.**
 3. 구체적인 숫자, 날짜, 담당자, 결정사항을 발췌 그대로 인용하십시오.
 4. 답변은 간결한 마크다운으로: 핵심 답변 1~3문장 → 필요 시 상세 bullet.
 5. 여러 회의에 걸친 내용이면 회의별로 구분해서 정리하십시오."""
@@ -75,9 +77,12 @@ def retrieve(
     host: str,
     top_k: int = 6,
     max_context_chars: int = 8000,
+    embed_timeout: float = 300.0,
+    min_score: float = 0.0,
 ) -> list[dict]:
     """벡터 + FTS 하이브리드 검색. 컨텍스트 길이 제한 내에서 청크 반환."""
-    hits = search_chunks(db_path, question, embed_model=embed_model, host=host, top_k=top_k)
+    hits = search_chunks(db_path, question, embed_model=embed_model, host=host,
+                         top_k=top_k, embed_timeout=embed_timeout, min_score=min_score)
     seen_texts = {h["text"] for h in hits}
     for h in _fts_supplement(db_path, question):
         if h["text"] not in seen_texts:
@@ -100,16 +105,14 @@ def _format_timestamp(sec) -> str:
     return f" {mm:02d}:{ss:02d}~"
 
 
-def _board_root_from_api_base(api_base: str) -> str:
-    """G5_API_BASE(.../plugin/meeting_api) → 그누보드5 루트 URL."""
-    return re.sub(r"/plugin/[^/]+/?$", "", api_base.rstrip("/"))
-
-
 def post_url(api_base: str, bo_table: str, wr_id) -> str | None:
+    """G5 게시글 URL. g5_client의 정식 URL 빌더를 재사용해 형식을 통일한다."""
     if not (api_base and wr_id):
         return None
-    root = _board_root_from_api_base(api_base)
-    return f"{root}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}"
+    try:
+        return _public_post_url_from_api_base(api_base, bo_table, int(wr_id))
+    except (TypeError, ValueError):
+        return None
 
 
 def build_context(hits: list[dict]) -> tuple[str, list[dict]]:
@@ -143,7 +146,12 @@ def generate_answer(
     *,
     model: str,
     host: str,
-    timeout: float = 600.0,
+    timeout: float = 300.0,
+    keep_alive: str = "0",
+    num_ctx_max: int = 32768,
+    num_predict: int = 4096,
+    num_gpu: int | None = None,
+    history: list[dict] | None = None,
 ) -> str:
     try:
         from ollama import Client
@@ -156,17 +164,24 @@ def generate_answer(
         f"## 질문\n\n{question}\n\n"
         "위 발췌만 근거로 답변하십시오."
     )
-    approx_tokens = int(len(user_msg) * 0.5) + 2048
-    num_ctx = min(131072, max(4096, ((approx_tokens // 1024) + 1) * 1024))
+    history_chars = sum(len(m.get("content", "")) for m in (history or []))
+    approx_tokens = int((len(user_msg) + history_chars) * 0.5) + 2048
+    num_ctx = min(num_ctx_max, max(4096, ((approx_tokens // 1024) + 1) * 1024))
+
+    options = {"temperature": 0.2, "num_ctx": num_ctx, "num_predict": num_predict}
+    if num_gpu is not None:
+        options["num_gpu"] = num_gpu
+
+    messages = [{"role": "system", "content": ANSWER_SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)  # [{"role": "user"/"assistant", "content": ...}, ...]
+    messages.append({"role": "user", "content": user_msg})
 
     resp = client.chat(
         model=model,
-        messages=[
-            {"role": "system", "content": ANSWER_SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-        options={"temperature": 0.2, "num_ctx": num_ctx, "num_predict": 4096},
-        keep_alive="60m",
+        messages=messages,
+        options=options,
+        keep_alive=keep_alive,
     )
     content = resp.get("message", {}).get("content", "") if isinstance(resp, dict) \
         else resp.message.content
@@ -185,14 +200,37 @@ def format_sources_footer(sources: list[dict], *, api_base: str, bo_table: str) 
     return "\n".join(lines)
 
 
+def _cited_source_numbers(answer: str) -> set[int]:
+    """답변 본문에서 LLM이 실제 인용한 출처 번호 추출.
+    모델이 [출처 N], (출처 N), 출처 N 등 다양한 형식으로 쓰므로 괄호는 무시한다."""
+    return {int(n) for n in re.findall(r"출처\s*(\d+)", answer)}
+
+
+def select_shown_sources(answer: str, sources: list[dict]) -> list[dict]:
+    """답변에 실제 인용된 출처만 노출한다.
+
+    인용이 전혀 없으면 LLM이 특정 회의를 근거로 삼지 않은 것이므로(주로 '관련 내용
+    없음' 답변), 무관한 회의가 검색됐더라도 출처로 내세우지 않고 빈 목록을 반환한다.
+    프롬프트가 근거 회의에 [출처 N] 표기를 강제하므로 정상 답변은 인용을 포함한다."""
+    cited = _cited_source_numbers(answer)
+    if not cited:
+        return []
+    return [s for s in sources if s["no"] in cited]
+
+
 def answer_question(
     cfg,
     question: str,
     *,
     auto_index: bool = True,
     top_k: int | None = None,
+    history: list[dict] | None = None,
 ) -> dict:
-    """질문 1건 처리. {answer, answer_with_sources, sources, hits} 반환."""
+    """질문 1건 처리. {answer, answer_with_sources, sources, hits} 반환.
+
+    history: 직전까지의 대화 [{"role": "user"/"assistant", "content": ...}, ...].
+             멀티턴 후속 질문("그건 누가 결정했어?")의 맥락 제공용.
+    """
     question = (question or "").strip()
     if not question:
         raise ValueError("질문이 비어 있습니다")
@@ -201,21 +239,51 @@ def answer_question(
         index_all(cfg.db_path, embed_model=cfg.embed_model, host=cfg.ollama_host,
                   verbose=False)
 
+    # 후속 질문은 그 자체로 검색어가 빈약("그건 누가?")할 수 있어, 직전 사용자 발화를
+    # 검색 쿼리에만 덧붙여 관련 청크를 더 잘 찾게 한다 (생성 맥락은 history로 따로 전달).
+    search_query = question
+    if history:
+        prev_user = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
+        if prev_user:
+            search_query = f"{prev_user} {question}"
+
     hits = retrieve(
-        cfg.db_path, question,
+        cfg.db_path, search_query,
         embed_model=cfg.embed_model, host=cfg.ollama_host,
         top_k=top_k or cfg.rag_top_k,
+        embed_timeout=cfg.ollama_timeout_sec,
+        min_score=cfg.rag_min_score,
     )
     if not hits:
         answer = "회의록에서 관련 내용을 찾지 못했습니다. (인덱싱된 회의가 없거나 질문과 관련된 회의가 없습니다)"
         return {"answer": answer, "answer_with_sources": answer, "sources": [], "hits": []}
 
     context, sources = build_context(hits)
-    answer = generate_answer(question, context, model=cfg.ollama_model, host=cfg.ollama_host)
-    footer = format_sources_footer(sources, api_base=cfg.g5_api_base, bo_table=cfg.g5_bo_table)
+
+    # 요약 모델 로드 전 메모리 점검 (본체 파이프라인과 동일 기준). 대화형이라
+    # 차단하지 않고 부족하면 경고만 — 사용자가 직접 다시 시도할 수 있다.
+    ok, snap = wait_for_min_free_ram(
+        cfg.ollama_min_free_ram_gib, timeout_sec=cfg.ollama_memory_wait_sec
+    )
+    if not ok:
+        print(f"[warn] free RAM 부족({format_snapshot(snap)}) — 답변 생성을 그대로 시도합니다.")
+
+    answer = generate_answer(
+        question, context,
+        model=cfg.ollama_model, host=cfg.ollama_host,
+        timeout=cfg.ollama_timeout_sec,
+        keep_alive=cfg.ollama_keep_alive,
+        num_ctx_max=cfg.ollama_num_ctx_max,
+        num_predict=min(4096, cfg.ollama_num_predict),
+        num_gpu=cfg.ollama_num_gpu,
+        history=history,
+    )
+    # 답변에 실제 인용된 출처만 노출 (무관한 회의가 검색돼도 출처 목록에 안 붙도록)
+    shown_sources = select_shown_sources(answer, sources)
+    footer = format_sources_footer(shown_sources, api_base=cfg.g5_api_base, bo_table=cfg.g5_bo_table)
     return {
         "answer": answer,
         "answer_with_sources": answer + footer,
-        "sources": sources,
+        "sources": shown_sources,
         "hits": hits,
     }
