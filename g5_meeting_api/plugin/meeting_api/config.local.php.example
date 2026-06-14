@@ -44,3 +44,10 @@ define('meeting_API_DEBUG', false);
 // define('meeting_API_MAX_BODY_BYTES', 3145728);
 // define('meeting_API_MAX_POST_CONTENT_BYTES', 2097152);
 // define('meeting_API_MAX_COMMENT_CONTENT_BYTES', 262144);
+
+// 게시판 시맨틱 검색(semantic_search.php): Python semantic_index.py가 만든
+// posts.db의 절대경로를 지정해야 검색 페이지가 동작합니다.
+// define('meeting_SEMANTIC_DB_PATH', 'C:/dev2/metting_record/data/posts.db');
+// define('meeting_SEMANTIC_OLLAMA_HOST', 'http://127.0.0.1:11434');
+// define('meeting_SEMANTIC_EMBED_MODEL', 'bge-m3');
+// define('meeting_SEMANTIC_MIN_SCORE', 0.35);

@@ -43,5 +43,16 @@ if (!defined('meeting_API_MAX_COMMENT_CONTENT_BYTES')) define('meeting_API_MAX_C
 // 예: define('meeting_PUBLIC_BASE_URL', 'https://example.com/gnu5624');
 if (!defined('meeting_PUBLIC_BASE_URL')) define('meeting_PUBLIC_BASE_URL', '');
 
+// ── 게시판 시맨틱 검색 (semantic_search.php) ─────────────────────────
+// 게시글 임베딩이 저장된 SQLite 경로 (Python semantic_index.py가 생성).
+// 빈 값이면 검색 페이지가 비활성. config.local.php에서 절대경로로 지정하세요.
+//   예: define('meeting_SEMANTIC_DB_PATH', 'C:/dev2/metting_record/data/posts.db');
+if (!defined('meeting_SEMANTIC_DB_PATH')) define('meeting_SEMANTIC_DB_PATH', '');
+if (!defined('meeting_SEMANTIC_OLLAMA_HOST')) define('meeting_SEMANTIC_OLLAMA_HOST', 'http://127.0.0.1:11434');
+if (!defined('meeting_SEMANTIC_EMBED_MODEL')) define('meeting_SEMANTIC_EMBED_MODEL', 'bge-m3');
+// 이 코사인 점수 미만 결과는 숨김 (0=비활성, bge-m3 한국어 0.3~0.4 권장)
+if (!defined('meeting_SEMANTIC_MIN_SCORE')) define('meeting_SEMANTIC_MIN_SCORE', 0.35);
+if (!defined('meeting_SEMANTIC_TOP_K')) define('meeting_SEMANTIC_TOP_K', 20);
+
 // 운영 안전을 위해 디버그는 기본 false. 필요할 때 config.local.php에서 명시적으로 true 지정.
 if (!defined('meeting_API_DEBUG')) define('meeting_API_DEBUG', false);
