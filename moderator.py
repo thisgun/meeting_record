@@ -185,7 +185,7 @@ def moderate_item(cfg, client: G5MeetingApiClient, *, bo_table: str, wr_id: int,
                     log(f"    요약 댓글 실패: {e}")
 
     action = "+".join(actions) or "ok"
-    mark(cfg.db_path, bo_table, wr_id, is_comment,
+    mark(cfg.board_db_path, bo_table, wr_id, is_comment,
          category=cat, confidence=conf, reason=cls.get("reason", ""),
          action=action, report_wr_id=report_wr_id)
     label = CATEGORY_LABEL_KO.get(cat, cat)
@@ -195,7 +195,7 @@ def moderate_item(cfg, client: G5MeetingApiClient, *, bo_table: str, wr_id: int,
 
 
 def poll_once(cfg, client: G5MeetingApiClient, *, page_size: int = 50) -> int:
-    init_mod_schema(cfg.db_path)
+    init_mod_schema(cfg.board_db_path)
     handled = 0
     for bo in cfg.mod_boards:
         if bo == cfg.mod_report_board:
@@ -215,7 +215,7 @@ def poll_once(cfg, client: G5MeetingApiClient, *, page_size: int = 50) -> int:
                 # 봇이 쓴 글(신고/요약)은 건너뜀
                 if (p.get("name") or "") == cfg.mod_bot_name:
                     continue
-                if not is_moderated(cfg.db_path, bo, wr_id, 0):
+                if not is_moderated(cfg.board_db_path, bo, wr_id, 0):
                     moderate_item(cfg, client, bo_table=bo, wr_id=wr_id, is_comment=0,
                                   subject=p.get("subject", ""), content=p.get("content", ""),
                                   name=p.get("name", ""))
@@ -229,7 +229,7 @@ def poll_once(cfg, client: G5MeetingApiClient, *, page_size: int = 50) -> int:
                         cid = int(c.get("comment_id") or 0)
                         if not cid or (c.get("author_name") or "") == cfg.mod_bot_name:
                             continue
-                        if not is_moderated(cfg.db_path, bo, cid, 1):
+                        if not is_moderated(cfg.board_db_path, bo, cid, 1):
                             moderate_item(cfg, client, bo_table=bo, wr_id=cid, is_comment=1,
                                           subject="", content=c.get("content", ""),
                                           name=c.get("author_name", ""))

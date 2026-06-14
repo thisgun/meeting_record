@@ -43,7 +43,8 @@ class Config:
     g5_api_base: str
     g5_api_token: str
     g5_bo_table: str
-    db_path: Path
+    db_path: Path                     # 회의록 도메인 (meetings/utterances/FTS/sync/rag_chunks)
+    board_db_path: Path               # 게시판 워처 상태 (qa_answers/moderation)
     work_dir: Path
     upload_dir: Path
     # RAG 챗봇 (ask.py / qa_watcher.py)
@@ -267,6 +268,7 @@ def load_config() -> Config:
         g5_api_token=os.getenv("G5_API_TOKEN", ""),
         g5_bo_table=os.getenv("G5_BO_TABLE", "meeting"),
         db_path=_path("DB_PATH", "./data/meetings.db"),
+        board_db_path=_db_file_path("BOARD_DB_PATH", "./data/board.db"),
         work_dir=_path("WORK_DIR", "./data/work"),
         upload_dir=_path("UPLOAD_DIR", "./data/uploads"),
         embed_model=os.getenv("EMBED_MODEL", "bge-m3"),

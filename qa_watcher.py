@@ -146,7 +146,7 @@ def _post_answer(cfg, client: G5MeetingApiClient, wr_id: int, question: str,
                  history: list[dict] | None, *, prev_comment_count: int) -> bool:
     """RAG 답변 생성 → 댓글 등록 → 상태 기록. 성공 시 True."""
     bo = cfg.qa_bo_table
-    mark(cfg.db_path, bo, wr_id, status="processing")
+    mark(cfg.board_db_path, bo, wr_id, status="processing")
     try:
         result = answer_question(cfg, question, auto_index=False, history=history)
         res = client.create_comment(
@@ -154,12 +154,12 @@ def _post_answer(cfg, client: G5MeetingApiClient, wr_id: int, question: str,
         )
         comment_id = int(res.get("comment_id") or 0)
         # 방금 봇 답변 1개가 추가됨 → 다음 폴링에서 재처리하지 않도록 카운트 반영
-        mark(cfg.db_path, bo, wr_id, status="done", comment_id=comment_id,
+        mark(cfg.board_db_path, bo, wr_id, status="done", comment_id=comment_id,
              comment_count=prev_comment_count + 1)
         log(f"  ✓ 답변 등록: #{wr_id} → 댓글 {comment_id} (출처 {len(result['sources'])}건)")
         return True
     except Exception as e:
-        mark(cfg.db_path, bo, wr_id, status="failed", error=str(e))
+        mark(cfg.board_db_path, bo, wr_id, status="failed", error=str(e))
         log(f"  ✗ 답변 실패: #{wr_id} - {e}")
         return False
 
@@ -190,7 +190,7 @@ def answer_followup(cfg, client: G5MeetingApiClient, q: dict) -> bool:
     history, pending = build_history_from_comments(body, comments)
     if not pending:
         # 사람 후속 없이 봇 답변만 늘어난 경우 — 카운트만 동기화해 재확인을 막는다
-        mark(cfg.db_path, bo, wr_id, status="done", comment_count=len(comments))
+        mark(cfg.board_db_path, bo, wr_id, status="done", comment_count=len(comments))
         return False
 
     if len(history) > _MAX_HISTORY_TURNS * 2:
@@ -202,9 +202,9 @@ def answer_followup(cfg, client: G5MeetingApiClient, q: dict) -> bool:
 
 def poll_once(cfg, client: G5MeetingApiClient, *, retry_failed: bool = False) -> int:
     """한 번 폴링. 새 질문 + 후속 댓글을 처리하고 처리 건수를 반환."""
-    init_qa_schema(cfg.db_path)
+    init_qa_schema(cfg.board_db_path)
 
-    # 새 회의록이 있으면 답변 전에 인덱싱
+    # 새 회의록이 있으면 답변 전에 인덱싱 (회의록 rag_chunks는 meetings.db)
     n = index_all(cfg.db_path, embed_model=cfg.embed_model, host=cfg.ollama_host, verbose=False)
     if n:
         log(f"  새 회의 {n}건 인덱싱")
@@ -214,7 +214,7 @@ def poll_once(cfg, client: G5MeetingApiClient, *, retry_failed: bool = False) ->
     for q in questions:
         wr_id = int(q["wr_id"])
         server_cc = int(q.get("comment_count") or 0)
-        state = get_qa_state(cfg.db_path, cfg.qa_bo_table, wr_id)
+        state = get_qa_state(cfg.board_db_path, cfg.qa_bo_table, wr_id)
         if state is None:
             handled += answer_new(cfg, client, q)
         elif state["status"] == "failed":
