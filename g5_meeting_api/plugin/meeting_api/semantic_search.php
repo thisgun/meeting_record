@@ -22,9 +22,31 @@ $ollama_host = rtrim((string)meeting_SEMANTIC_OLLAMA_HOST, '/');
 $embed_model = (string)meeting_SEMANTIC_EMBED_MODEL;
 $min_score = (float)meeting_SEMANTIC_MIN_SCORE;
 $top_k = (int)meeting_SEMANTIC_TOP_K;
+$rate_per_min = (int)meeting_SEMANTIC_RATE_PER_MIN;
+$max_query_len = (int)meeting_SEMANTIC_MAX_QUERY_LEN;
 
 $q = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
+// 임베딩 부하/남용 방지: 검색어 길이 제한
+if ($q !== '' && mb_strlen($q, 'UTF-8') > $max_query_len) {
+    $q = mb_substr($q, 0, $max_query_len, 'UTF-8');
+}
 $bo_filter = isset($_GET['bo_table']) ? preg_replace('/[^A-Za-z0-9_]/', '', (string)$_GET['bo_table']) : '';
+
+/** 무인증 공개 페이지 보호: IP당 분당 검색 횟수 제한 (파일 기반 슬라이딩 윈도우). */
+function semantic_rate_limited(int $max_per_min): bool {
+    if ($max_per_min <= 0) return false;
+    $ip = (string)($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+    $dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'meeting_sem_rl';
+    if (!is_dir($dir)) @mkdir($dir, 0700, true);
+    $file = $dir . DIRECTORY_SEPARATOR . hash('sha256', $ip) . '.json';
+    $now = time();
+    $hits = is_file($file) ? (json_decode((string)@file_get_contents($file), true) ?: []) : [];
+    $hits = array_values(array_filter($hits, fn($t) => (int)$t > $now - 60));
+    if (count($hits) >= $max_per_min) return true;
+    $hits[] = $now;
+    @file_put_contents($file, json_encode($hits), LOCK_EX);
+    return false;
+}
 
 /** Ollama 임베딩 호출 + L2 정규화. 실패 시 null. */
 function semantic_embed(string $host, string $model, string $text): ?array {
@@ -97,7 +119,10 @@ function semantic_search(string $db_path, string $model, array $qvec, string $bo
 $error = '';
 $results = [];
 if ($q !== '') {
-    if ($db_path === '' || !is_file($db_path)) {
+    if (semantic_rate_limited($rate_per_min)) {
+        http_response_code(429);
+        $error = '검색 요청이 너무 많습니다. 잠시 후 다시 시도하세요.';
+    } elseif ($db_path === '' || !is_file($db_path)) {
         $error = '검색 인덱스가 설정되지 않았습니다. config.local.php에 meeting_SEMANTIC_DB_PATH를 지정하고 '
                . 'python semantic_index.py 로 인덱싱하세요.';
     } else {

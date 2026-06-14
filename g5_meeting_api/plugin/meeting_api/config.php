@@ -53,6 +53,9 @@ if (!defined('meeting_SEMANTIC_EMBED_MODEL')) define('meeting_SEMANTIC_EMBED_MOD
 // 이 코사인 점수 미만 결과는 숨김 (0=비활성, bge-m3 한국어 0.3~0.4 권장)
 if (!defined('meeting_SEMANTIC_MIN_SCORE')) define('meeting_SEMANTIC_MIN_SCORE', 0.35);
 if (!defined('meeting_SEMANTIC_TOP_K')) define('meeting_SEMANTIC_TOP_K', 20);
+// 무인증 공개 페이지 보호: IP당 분당 최대 검색 횟수(0=무제한), 검색어 최대 길이
+if (!defined('meeting_SEMANTIC_RATE_PER_MIN')) define('meeting_SEMANTIC_RATE_PER_MIN', 20);
+if (!defined('meeting_SEMANTIC_MAX_QUERY_LEN')) define('meeting_SEMANTIC_MAX_QUERY_LEN', 200);
 
 // 운영 안전을 위해 디버그는 기본 false. 필요할 때 config.local.php에서 명시적으로 true 지정.
 if (!defined('meeting_API_DEBUG')) define('meeting_API_DEBUG', false);
